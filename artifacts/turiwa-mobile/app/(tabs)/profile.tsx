@@ -1,8 +1,10 @@
 import { Feather } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import React from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { BrandHeader, Screen } from '@/components/TuriwaUI';
+import { useTuriwa } from '@/context/TuriwaContext';
 
 const items: { icon: keyof typeof Feather.glyphMap; label: string; detail: string }[] = [
   { icon: 'user', label: 'Personal details', detail: 'Your name and contact information' },
@@ -12,12 +14,14 @@ const items: { icon: keyof typeof Feather.glyphMap; label: string; detail: strin
 
 export default function ProfileScreen() {
   const colors = useColors();
+  const { profileName, signOut } = useTuriwa();
+  const initials = profileName.trim().slice(0, 1).toUpperCase() || 'S';
   return (
     <Screen>
       <BrandHeader title="Your profile" subtitle="Your Turiwa account, your way." />
       <View style={[styles.profileCard, { backgroundColor: colors.primary }]}>
-        <View style={[styles.avatar, { backgroundColor: colors.accent }]}><Text style={[styles.avatarText, { color: colors.accentForeground }]}>S</Text></View>
-        <View style={{ flex: 1 }}><Text style={[styles.profileName, { color: colors.primaryForeground }]}>Sheila Tundo</Text><Text style={[styles.profileMeta, { color: colors.successSoft }]}>Member since August 2026</Text></View>
+        <View style={[styles.avatar, { backgroundColor: colors.accent }]}><Text style={[styles.avatarText, { color: colors.accentForeground }]}>{initials}</Text></View>
+        <View style={{ flex: 1 }}><Text style={[styles.profileName, { color: colors.primaryForeground }]}>{profileName}</Text><Text style={[styles.profileMeta, { color: colors.successSoft }]}>Member since August 2026</Text></View>
         <View style={[styles.verified, { backgroundColor: 'rgba(255,255,255,0.15)' }]}><Feather name="check" size={13} color={colors.primaryForeground} /><Text style={[styles.verifiedText, { color: colors.primaryForeground }]}>Verified</Text></View>
       </View>
       <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>ACCOUNT</Text>
@@ -26,7 +30,7 @@ export default function ProfileScreen() {
       </View>
       <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>ABOUT TURIWA</Text>
       <View style={[styles.aboutCard, { backgroundColor: colors.warmSurface, borderColor: colors.accent }]}><Text style={[styles.aboutTitle, { color: colors.foreground }]}>Trust, transparently.</Text><Text style={[styles.aboutCopy, { color: colors.inkSoft }]}>Turiwa helps communities save together with clarity, accountability, and a shared sense of progress.</Text><Text style={[styles.version, { color: colors.mutedForeground }]}>Version 1.0.0</Text></View>
-      <Pressable onPress={() => Alert.alert('Sign out', 'You are already using Turiwa securely on this device.')} style={styles.signOut}><Feather name="log-out" size={16} color={colors.destructive} /><Text style={[styles.signOutText, { color: colors.destructive }]}>Sign out</Text></Pressable>
+      <Pressable onPress={() => Alert.alert('Sign out', 'Are you sure you want to sign out?', [{ text: 'Cancel', style: 'cancel' }, { text: 'Sign out', style: 'destructive', onPress: async () => { await signOut(); router.replace('/(auth)/welcome'); } }])} style={styles.signOut}><Feather name="log-out" size={16} color={colors.destructive} /><Text style={[styles.signOutText, { color: colors.destructive }]}>Sign out</Text></Pressable>
     </Screen>
   );
 }

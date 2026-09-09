@@ -34,10 +34,16 @@ type TuriwaContextValue = {
   circles: Circle[];
   contributions: Contribution[];
   loans: Loan[];
+  authHydrated: boolean;
+  signedIn: boolean;
+  profileName: string;
   addContribution: (amount: number, note: string) => Promise<void>;
   createCircle: (name: string, monthly: number) => Promise<void>;
   applyForLoan: (amount: number, purpose: string) => Promise<void>;
   repayLoan: (amount: number) => Promise<void>;
+  signIn: (phone: string, password: string) => Promise<void>;
+  createAccount: (name: string, phone: string, password: string) => Promise<void>;
+  signOut: () => Promise<void>;
   hydrated: boolean;
 };
 
@@ -68,6 +74,7 @@ const initialLoans: Loan[] = [
 const CIRCLES_KEY = '@turiwa/circles';
 const CONTRIBUTIONS_KEY = '@turiwa/contributions';
 const LOANS_KEY = '@turiwa/loans';
+const AUTH_KEY = '@turiwa/auth';
 const TuriwaContext = createContext<TuriwaContextValue | null>(null);
 
 export function TuriwaProvider({ children }: { children: React.ReactNode }) {
@@ -75,6 +82,9 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const [contributions, setContributions] = useState<Contribution[]>(initialContributions);
   const [loans, setLoans] = useState<Loan[]>(initialLoans);
   const [hydrated, setHydrated] = useState(false);
+  const [authHydrated, setAuthHydrated] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [profileName, setProfileName] = useState('Sheila');
 
   useEffect(() => {
     let active = true;
@@ -82,13 +92,23 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.getItem(CIRCLES_KEY),
       AsyncStorage.getItem(CONTRIBUTIONS_KEY),
       AsyncStorage.getItem(LOANS_KEY),
-    ]).then(([storedCircles, storedContributions, storedLoans]) => {
+      AsyncStorage.getItem(AUTH_KEY),
+    ]).then(([storedCircles, storedContributions, storedLoans, storedAuth]) => {
       if (!active) return;
       if (storedCircles) setCircles(JSON.parse(storedCircles) as Circle[]);
       if (storedContributions) setContributions(JSON.parse(storedContributions) as Contribution[]);
       if (storedLoans) setLoans(JSON.parse(storedLoans) as Loan[]);
+      if (storedAuth) {
+        const auth = JSON.parse(storedAuth) as { signedIn?: boolean; name?: string };
+        setSignedIn(Boolean(auth.signedIn));
+        if (auth.name) setProfileName(auth.name);
+      }
       setHydrated(true);
-    }).catch(() => setHydrated(true));
+      setAuthHydrated(true);
+    }).catch(() => {
+      setHydrated(true);
+      setAuthHydrated(true);
+    });
     return () => { active = false; };
   }, []);
 
@@ -145,9 +165,42 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(LOANS_KEY, JSON.stringify(next));
   };
 
+  const signIn = async (_phone: string, _password: string) => {
+    const next = { signedIn: true, name: profileName || 'Sheila' };
+    setSignedIn(true);
+    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+  };
+
+  const createAccount = async (name: string, _phone: string, _password: string) => {
+    const next = { signedIn: true, name: name.trim() || 'Sheila' };
+    setProfileName(next.name);
+    setSignedIn(true);
+    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+  };
+
+  const signOut = async () => {
+    setSignedIn(false);
+    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify({ signedIn: false, name: profileName }));
+  };
+
   const value = useMemo(
-    () => ({ circles, contributions, loans, addContribution, createCircle, applyForLoan, repayLoan, hydrated }),
-    [circles, contributions, loans, hydrated],
+    () => ({
+      circles,
+      contributions,
+      loans,
+      authHydrated,
+      signedIn,
+      profileName,
+      addContribution,
+      createCircle,
+      applyForLoan,
+      repayLoan,
+      signIn,
+      createAccount,
+      signOut,
+      hydrated,
+    }),
+    [circles, contributions, loans, authHydrated, signedIn, profileName, hydrated],
   );
   return <TuriwaContext.Provider value={value}>{children}</TuriwaContext.Provider>;
 }
