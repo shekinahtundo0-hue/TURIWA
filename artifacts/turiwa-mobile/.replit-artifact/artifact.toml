@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/"
+title = "Turiwa Mobile"
+description = "A cross-platform mobile app for Turiwa, a Kenyan chama management experience that helps groups organize contributions, track member activity, and stay aligned around shared financial goals."
+version = "1.0.0"
+id = "artifacts/turiwa-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/" ]
+localPort = 25128
+
+[services.development]
+run = "pnpm --filter @workspace/turiwa-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/turiwa-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/turiwa-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "25128"
+BASE_PATH = "/"
