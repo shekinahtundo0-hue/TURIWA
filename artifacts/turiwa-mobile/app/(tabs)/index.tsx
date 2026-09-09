@@ -1,11 +1,11 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useTuriwa } from '@/context/TuriwaContext';
 import {
-  ActivityRow,
   AddContributionModal,
   Amount,
   BrandHeader,
@@ -18,11 +18,13 @@ import {
 
 export default function HomeScreen() {
   const colors = useColors();
-  const { circles, contributions, addContribution, hydrated } = useTuriwa();
+  const router = useRouter();
+  const { circles, contributions, addContribution, loans, hydrated } = useTuriwa();
   const [modalVisible, setModalVisible] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const totalSaved = contributions.reduce((sum, item) => sum + item.amount, 0);
   const upcoming = circles[0]?.monthly ?? 2000;
+  const activeLoan = loans.find((loan) => loan.status === 'Active' || loan.status === 'Pending');
 
   if (!hydrated) {
     return (
@@ -82,37 +84,20 @@ export default function HomeScreen() {
           <View style={{ width: 10 }} />
           <StatPill icon="trending-up" label="On track" value="100%" tone="gold" />
         </View>
-        <View style={styles.quickActionRow}>
-          <View style={{ flex: 1 }}>
-            <PrimaryButton
-              label="Add contribution"
-              icon="plus"
-              onPress={() => {
-                Haptics.selectionAsync();
-                setModalVisible(true);
-              }}
-            />
-          </View>
-          <Pressable
-            onPress={() =>
-              Alert.alert(
-                'Invite a member',
-                'Share your circle invite link from the Circles tab.',
-              )
-            }
-            style={({ pressed }) => [
-              styles.inviteButton,
-              {
-                borderColor: colors.border,
-                backgroundColor: colors.card,
-                opacity: pressed ? 0.7 : 1,
-              },
-            ]}
-          >
-            <Feather name="user-plus" size={17} color={colors.primary} />
-            <Text style={[styles.inviteText, { color: colors.primary }]}>Invite</Text>
-          </Pressable>
+        <SectionHeading title="Turiwa services" />
+        <View style={styles.serviceGrid}>
+          <ServiceTile icon="credit-card" label="Loans" detail="KES 20,000 ready" onPress={() => router.push('/loans')} />
+          <ServiceTile icon="plus-circle" label="Contribute" detail="Add to a circle" onPress={() => { Haptics.selectionAsync(); setModalVisible(true); }} />
+          <ServiceTile icon="users" label="Circles" detail={`${circles.length} active groups`} onPress={() => router.push('/circles')} />
+          <ServiceTile icon="activity" label="Activity" detail="Track every move" onPress={() => router.push('/activity')} />
         </View>
+        {activeLoan ? (
+          <Pressable onPress={() => router.push('/loans')} style={({ pressed }) => [styles.loanSnapshot, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.82 : 1 }]}>
+            <View style={[styles.loanSnapshotIcon, { backgroundColor: colors.successSoft }]}><MaterialCommunityIcons name="hand-coin-outline" size={19} color={colors.primary} /></View>
+            <View style={styles.loanSnapshotCopy}><Text style={[styles.loanSnapshotLabel, { color: colors.mutedForeground }]}>CURRENT LOAN · {activeLoan.status.toUpperCase()}</Text><Text style={[styles.loanSnapshotAmount, { color: colors.foreground }]}>KES {activeLoan.balance.toLocaleString()} remaining</Text></View>
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+          </Pressable>
+        ) : null}
         <SectionHeading
           title="Your circles"
           action="See all"
@@ -199,6 +184,17 @@ function ActivityPreview({
   );
 }
 
+function ServiceTile({ icon, label, detail, onPress }: { icon: keyof typeof Feather.glyphMap; label: string; detail: string; onPress: () => void }) {
+  const colors = useColors();
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.serviceTile, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.75 : 1 }]}>
+      <View style={[styles.serviceIcon, { backgroundColor: colors.successSoft }]}><Feather name={icon} size={18} color={colors.primary} /></View>
+      <Text style={[styles.serviceLabel, { color: colors.foreground }]}>{label}</Text>
+      <Text style={[styles.serviceDetail, { color: colors.mutedForeground }]} numberOfLines={1}>{detail}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   heroWrap: { position: 'relative', marginBottom: 17 },
@@ -247,17 +243,16 @@ const styles = StyleSheet.create({
     zIndex: -1,
   },
   statsRow: { flexDirection: 'row' },
-  quickActionRow: { flexDirection: 'row', gap: 10, marginTop: 18 },
-  inviteButton: {
-    flex: 0.42,
-    borderWidth: 1,
-    borderRadius: 14,
-    flexDirection: 'row',
-    gap: 7,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  inviteText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  serviceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  serviceTile: { width: '48.5%', minHeight: 106, borderRadius: 17, borderWidth: 1, padding: 13 },
+  serviceIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  serviceLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  serviceDetail: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 5 },
+  loanSnapshot: { borderRadius: 17, borderWidth: 1, padding: 13, flexDirection: 'row', gap: 10, alignItems: 'center', marginTop: 17 },
+  loanSnapshotIcon: { width: 37, height: 37, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  loanSnapshotCopy: { flex: 1 },
+  loanSnapshotLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.2 },
+  loanSnapshotAmount: { fontFamily: 'Inter_600SemiBold', fontSize: 13, marginTop: 4 },
   previewRow: {
     flexDirection: 'row',
     alignItems: 'center',

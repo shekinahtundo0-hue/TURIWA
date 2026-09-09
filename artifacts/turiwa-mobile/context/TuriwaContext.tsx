@@ -19,11 +19,25 @@ export type Circle = {
   color: 'green' | 'gold' | 'blue';
 };
 
+export type Loan = {
+  id: string;
+  principal: number;
+  balance: number;
+  monthlyRepayment: number;
+  interestRate: number;
+  dueDate: string;
+  purpose: string;
+  status: 'Active' | 'Pending' | 'Paid off';
+};
+
 type TuriwaContextValue = {
   circles: Circle[];
   contributions: Contribution[];
+  loans: Loan[];
   addContribution: (amount: number, note: string) => Promise<void>;
   createCircle: (name: string, monthly: number) => Promise<void>;
+  applyForLoan: (amount: number, purpose: string) => Promise<void>;
+  repayLoan: (amount: number) => Promise<void>;
   hydrated: boolean;
 };
 
@@ -38,21 +52,41 @@ const initialContributions: Contribution[] = [
   { id: '3', circleId: 'harambee', amount: 2000, date: '28 Jul 2026', note: 'Monthly contribution', status: 'Complete' },
 ];
 
+const initialLoans: Loan[] = [
+  {
+    id: 'loan-1',
+    principal: 30000,
+    balance: 16800,
+    monthlyRepayment: 4000,
+    interestRate: 5,
+    dueDate: '30 Sep 2026',
+    purpose: 'School fees',
+    status: 'Active',
+  },
+];
+
 const CIRCLES_KEY = '@turiwa/circles';
 const CONTRIBUTIONS_KEY = '@turiwa/contributions';
+const LOANS_KEY = '@turiwa/loans';
 const TuriwaContext = createContext<TuriwaContextValue | null>(null);
 
 export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const [circles, setCircles] = useState<Circle[]>(initialCircles);
   const [contributions, setContributions] = useState<Contribution[]>(initialContributions);
+  const [loans, setLoans] = useState<Loan[]>(initialLoans);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     let active = true;
-    Promise.all([AsyncStorage.getItem(CIRCLES_KEY), AsyncStorage.getItem(CONTRIBUTIONS_KEY)]).then(([storedCircles, storedContributions]) => {
+    Promise.all([
+      AsyncStorage.getItem(CIRCLES_KEY),
+      AsyncStorage.getItem(CONTRIBUTIONS_KEY),
+      AsyncStorage.getItem(LOANS_KEY),
+    ]).then(([storedCircles, storedContributions, storedLoans]) => {
       if (!active) return;
       if (storedCircles) setCircles(JSON.parse(storedCircles) as Circle[]);
       if (storedContributions) setContributions(JSON.parse(storedContributions) as Contribution[]);
+      if (storedLoans) setLoans(JSON.parse(storedLoans) as Loan[]);
       setHydrated(true);
     }).catch(() => setHydrated(true));
     return () => { active = false; };
@@ -84,7 +118,37 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(CIRCLES_KEY, JSON.stringify(next));
   };
 
-  const value = useMemo(() => ({ circles, contributions, addContribution, createCircle, hydrated }), [circles, contributions, hydrated]);
+  const applyForLoan = async (amount: number, purpose: string) => {
+    const next: Loan[] = [{
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      principal: amount,
+      balance: amount,
+      monthlyRepayment: Math.ceil((amount * 1.05) / 6),
+      interestRate: 5,
+      dueDate: '30 Oct 2026',
+      purpose: purpose.trim() || 'Personal need',
+      status: 'Pending',
+    }, ...loans];
+    setLoans(next);
+    await AsyncStorage.setItem(LOANS_KEY, JSON.stringify(next));
+  };
+
+  const repayLoan = async (amount: number) => {
+    const activeLoan = loans.find((loan) => loan.status === 'Active' || loan.status === 'Pending');
+    if (!activeLoan) return;
+    const next = loans.map((loan) => {
+      if (loan.id !== activeLoan.id) return loan;
+      const balance = Math.max(loan.balance - amount, 0);
+      return { ...loan, balance, status: balance === 0 ? 'Paid off' as const : 'Active' as const };
+    });
+    setLoans(next);
+    await AsyncStorage.setItem(LOANS_KEY, JSON.stringify(next));
+  };
+
+  const value = useMemo(
+    () => ({ circles, contributions, loans, addContribution, createCircle, applyForLoan, repayLoan, hydrated }),
+    [circles, contributions, loans, hydrated],
+  );
   return <TuriwaContext.Provider value={value}>{children}</TuriwaContext.Provider>;
 }
 
