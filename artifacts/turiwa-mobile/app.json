@@ -3,21 +3,41 @@
     "name": "Turiwa Mobile",
     "slug": "turiwa-mobile",
     "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "orientation": "default",
+    "icon": "./assets/images/icon-brand.png",
     "splash": {
-      "backgroundColor": "#FAFAFA",
-      "image": "./assets/images/icon.png",
+      "backgroundColor": "#050811",
+      "image": "./assets/images/splash-mark.png",
       "resizeMode": "contain"
     },
-    "scheme": "turiwa-mobile",
+    "scheme": ["turiwa-mobile", "ke.co.turiwa.mobile"],
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": true
     },
-    "android": {},
+    "android": {
+      "package": "ke.co.turiwa.mobile",
+      "versionCode": 1,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon-brand.png",
+        "backgroundColor": "#050811"
+      }
+    },
+    "extra": {
+      "apiUrl": "http://localhost:5000",
+      "supabaseUrl": "https://adxqhuypkpoekifqjadu.supabase.co",
+      "supabaseRestUrl": "https://adxqhuypkpoekifqjadu.supabase.co/rest/v1",
+      "supabasePublishableKey": "sb_publishable_3OsY2j6diDMmyoC7HRBSXQ_hD3ZXZRl"
+    },
     "web": {
-      "favicon": "./assets/images/icon.png"
+      "favicon": "./assets/images/icon-brand.png"
     },
     "plugins": ["expo-router"],
     "experiments": {

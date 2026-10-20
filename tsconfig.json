@@ -2,6 +2,7 @@
   "extends": "./tsconfig.base.json",
   "compileOnSave": false,
   "files": [],
+  "exclude": ["ui", "brand", "node_modules"],
   "references": [
     {
       "path": "./lib/db"

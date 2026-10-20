@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Light Mode Gradient: #065F46 base to #22C55E accent -->
+    <linearGradient id="flowGradLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22C55E" />
+      <stop offset="100%" stop-color="#065F46" />
+    </linearGradient>
+
+    <!-- Subtle Soft Drop Shadow -->
+    <filter id="softShadowLight" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#065F46" flood-opacity="0.15" />
+    </filter>
+
+    <radialGradient id="lightBgAura" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#F0FDF4" />
+      <stop offset="100%" stop-color="#FFFFFF" />
+    </radialGradient>
+  </defs>
+
+  <!-- Background Surface -->
+  <rect width="512" height="512" rx="112" fill="#FFFFFF" />
+  <circle cx="256" cy="256" r="210" fill="url(#lightBgAura)" />
+
+  <!-- Subtle Construction Guidelines -->
+  <circle cx="256" cy="256" r="150" stroke="#065F46" stroke-width="1" stroke-dasharray="3 6" opacity="0.12" fill="none" />
+  <circle cx="256" cy="220" r="92" stroke="#22C55E" stroke-width="1" stroke-dasharray="3 6" opacity="0.12" fill="none" />
+
+  <!-- Logo Concept A: The Flow Mark (Light Mode) -->
+  <g filter="url(#softShadowLight)">
+    <!-- Central Converging Spine forming dynamic T -->
+    <path d="M 256,400 L 256,155" 
+          stroke="url(#flowGradLight)" stroke-width="12" stroke-linecap="round" fill="none" />
+
+    <!-- Left Flowing Branch -->
+    <path d="M 190,380 C 215,315 220,265 256,220 C 235,180 180,165 130,165" 
+          stroke="#065F46" stroke-width="10" stroke-linecap="round" fill="none" />
+
+    <!-- Right Flowing Branch -->
+    <path d="M 322,380 C 297,315 292,265 256,220 C 277,180 332,165 382,165" 
+          stroke="#065F46" stroke-width="10" stroke-linecap="round" fill="none" />
+
+    <!-- Primary Top Crossbar -->
+    <path d="M 130,165 C 172,138 218,132 256,132 C 294,132 340,138 382,165" 
+          stroke="#065F46" stroke-width="14" stroke-linecap="round" fill="none" />
+
+    <!-- Dynamic Flow Lattice Ribs -->
+    <path d="M 155,205 C 205,178 256,178 256,178 C 256,178 307,178 357,205" 
+          stroke="#22C55E" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.9" />
+    <path d="M 180,265 C 218,245 256,245 256,245 C 256,245 294,245 332,265" 
+          stroke="#22C55E" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.85" />
+    <path d="M 190,380 C 230,370 256,380 256,400 C 256,380 282,370 322,380" 
+          stroke="#22C55E" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.8" />
+
+    <!-- Interconnected Nodes -->
+    <!-- Top Horizontal Crossbar Nodes -->
+    <circle cx="130" cy="165" r="14" fill="#065F46" />
+    <circle cx="130" cy="165" r="6" fill="#FFFFFF" />
+
+    <circle cx="198" cy="140" r="10" fill="#22C55E" />
+    <circle cx="256" cy="132" r="15" fill="#065F46" />
+    <circle cx="256" cy="132" r="6" fill="#22C55E" />
+    <circle cx="314" cy="140" r="10" fill="#22C55E" />
+
+    <circle cx="382" cy="165" r="14" fill="#065F46" />
+    <circle cx="382" cy="165" r="6" fill="#FFFFFF" />
+
+    <!-- Mid Elevation Nodes -->
+    <circle cx="155" cy="205" r="10" fill="#22C55E" />
+    <circle cx="357" cy="205" r="10" fill="#22C55E" />
+
+    <circle cx="256" cy="220" r="13" fill="#065F46" />
+    <circle cx="256" cy="220" r="5" fill="#22C55E" />
+
+    <circle cx="180" cy="265" r="9" fill="#22C55E" />
+    <circle cx="332" cy="265" r="9" fill="#22C55E" />
+
+    <!-- Lower Stem Nodes -->
+    <circle cx="256" cy="315" r="11" fill="#065F46" />
+    <circle cx="190" cy="380" r="12" fill="#065F46" />
+    <circle cx="190" cy="380" r="5" fill="#22C55E" />
+    <circle cx="322" cy="380" r="12" fill="#065F46" />
+    <circle cx="322" cy="380" r="5" fill="#22C55E" />
+
+    <!-- Base Root Node -->
+    <circle cx="256" cy="400" r="16" fill="#065F46" />
+    <circle cx="256" cy="400" r="7" fill="#22C55E" />
+  </g>
+</svg>

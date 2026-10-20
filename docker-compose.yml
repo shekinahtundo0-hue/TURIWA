@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: turiwa
+      POSTGRES_PASSWORD: turiwa
+      POSTGRES_DB: turiwa
+    ports:
+      - "5432:5432"
+    volumes:
+      - turiwa_pg:/var/lib/postgresql/data
+
+volumes:
+  turiwa_pg:

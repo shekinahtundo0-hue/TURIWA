@@ -1,42 +1,37 @@
 import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, TextInputProps, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useColors } from '@/hooks/useColors';
+import { useResponsive } from '@/hooks/useResponsive';
+import { TuriwaLogo } from '@/components/TuriwaLogo';
 
 export function TuriwaMark({ size = 72 }: { size?: number }) {
-  const colors = useColors();
-  const leaf = size * 0.25;
-  return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <View style={[styles.markRing, { width: size * 0.78, height: size * 0.78, borderColor: colors.primary }]} />
-      <View style={[styles.leaf, styles.leafLeft, { width: leaf, height: leaf * 1.5, backgroundColor: colors.primary }]} />
-      <View style={[styles.leaf, styles.leafRight, { width: leaf, height: leaf * 1.5, backgroundColor: colors.tint }]} />
-      <View style={[styles.leaf, styles.leafTop, { width: leaf * 0.82, height: leaf * 1.25, backgroundColor: colors.primary }]} />
-      <View style={[styles.markDot, { width: size * 0.12, height: size * 0.12, borderRadius: size * 0.06, backgroundColor: colors.accent }]} />
-    </View>
-  );
+  return <TuriwaLogo size={size} />;
 }
 
 export function AuthShell({ children, scroll = true }: { children: React.ReactNode; scroll?: boolean }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { gutter } = useResponsive();
   return (
     <KeyboardAwareScrollViewCompat
       style={[styles.shell, { backgroundColor: colors.background }]}
       contentContainerStyle={{
         paddingTop: insets.top + 18,
         paddingBottom: insets.bottom + 28,
-        paddingHorizontal: 20,
+        paddingHorizontal: gutter,
         flexGrow: 1,
+        alignItems: 'center',
       }}
       bottomOffset={28}
       scrollEnabled={scroll}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      {children}
+      <View style={styles.shellColumn}>{children}</View>
     </KeyboardAwareScrollViewCompat>
   );
 }
@@ -46,11 +41,11 @@ export function AuthHeader({ title, subtitle, onBack }: { title: string; subtitl
   return (
     <View style={styles.authHeader}>
       {onBack ? (
-        <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}>
+        <Pressable onPress={onBack} testID="auth-back" accessibilityRole="button" accessibilityLabel="Go back" style={styles.backButton} hitSlop={10}>
           <Feather name="arrow-left" size={20} color={colors.foreground} />
         </Pressable>
       ) : null}
-      <TuriwaMark size={44} />
+      <TuriwaMark size={48} />
       <Text style={[styles.authTitle, { color: colors.foreground }]}>{title}</Text>
       <Text style={[styles.authSubtitle, { color: colors.mutedForeground }]}>{subtitle}</Text>
     </View>
@@ -67,7 +62,7 @@ export function AuthField({ label, error, ...props }: TextInputProps & { label: 
         placeholderTextColor={colors.mutedForeground}
         style={[
           styles.field,
-          { backgroundColor: colors.muted, borderColor: error ? colors.destructive : colors.border, color: colors.foreground },
+          { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border, color: colors.foreground },
           props.style,
         ]}
       />
@@ -78,26 +73,62 @@ export function AuthField({ label, error, ...props }: TextInputProps & { label: 
 
 export function AuthButton({ label, onPress, outline = false, disabled = false, icon }: { label: string; onPress: () => void; outline?: boolean; disabled?: boolean; icon?: keyof typeof Feather.glyphMap }) {
   const colors = useColors();
+  if (outline) {
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityState={{ disabled }}
+        style={({ pressed }) => [
+          styles.authButton,
+          {
+            backgroundColor: colors.card,
+            borderColor: colors.border,
+            transform: [{ scale: pressed ? 0.985 : 1 }],
+            opacity: disabled ? 0.45 : pressed ? 0.8 : 1,
+          },
+        ]}
+      >
+        {icon ? <Feather name={icon} size={17} color={colors.primary} /> : null}
+        <Text style={[styles.authButtonText, { color: colors.primary }]}>{label}</Text>
+      </Pressable>
+    );
+  }
+
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
       style={({ pressed }) => [
-        styles.authButton,
-        { backgroundColor: outline ? colors.card : colors.primary, borderColor: outline ? colors.tint : colors.primary, opacity: disabled ? 0.45 : pressed ? 0.86 : 1 },
+        styles.authButtonOuter,
+        {
+          borderRadius: 14,
+          transform: [{ scale: pressed ? 0.985 : 1 }],
+          opacity: disabled ? 0.45 : pressed ? 0.88 : 1,
+        },
       ]}
     >
-      {icon ? <Feather name={icon} size={17} color={outline ? colors.primary : colors.primaryForeground} /> : null}
-      <Text style={[styles.authButtonText, { color: outline ? colors.primary : colors.primaryForeground }]}>{label}</Text>
+      <LinearGradient
+        colors={[colors.primary, colors.secondary]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.authButtonGrad}
+      >
+        {icon ? <Feather name={icon} size={17} color={colors.primaryForeground} /> : null}
+        <Text style={[styles.authButtonText, { color: colors.primaryForeground }]}>{label}</Text>
+      </LinearGradient>
     </Pressable>
   );
 }
 
-export function ProgressSegments({ active }: { active: number }) {
+export function ProgressSegments({ active, total = 3 }: { active: number; total?: number }) {
   const colors = useColors();
   return (
     <View style={styles.progressSegments}>
-      {[1, 2, 3].map((item) => (
+      {Array.from({ length: total }, (_item, index) => index + 1).map((item) => (
         <View key={item} style={[styles.progressSegment, { backgroundColor: item <= active ? colors.primary : colors.muted }]} />
       ))}
     </View>
@@ -106,6 +137,8 @@ export function ProgressSegments({ active }: { active: number }) {
 
 const styles = StyleSheet.create({
   shell: { flex: 1 },
+  // Sign-in forms stay a readable column instead of stretching across a desktop window.
+  shellColumn: { width: '100%', maxWidth: 460, flexGrow: 1 },
   markRing: { position: 'absolute', borderWidth: 2, borderRadius: 999 },
   leaf: { position: 'absolute', borderRadius: 999, transform: [{ rotate: '45deg' }] },
   leafLeft: { left: '20%', top: '38%', transform: [{ rotate: '-48deg' }] },
@@ -118,12 +151,14 @@ const styles = StyleSheet.create({
   authSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 14, lineHeight: 21, textAlign: 'center', marginTop: 7, maxWidth: 320 },
   fieldGroup: { marginBottom: 14 },
   fieldLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 12, marginBottom: 7 },
-  field: { minHeight: 54, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, fontFamily: 'Inter_400Regular', fontSize: 15 },
+  field: { minHeight: 52, borderWidth: 1, borderRadius: 14, paddingHorizontal: 15, fontFamily: 'Inter_400Regular', fontSize: 15 },
   errorText: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 6 },
-  authButton: { minHeight: 54, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 18 },
-  authButtonText: { fontFamily: 'Inter_600SemiBold', fontSize: 15 },
+  authButtonOuter: { overflow: 'hidden' },
+  authButtonGrad: { minHeight: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 18 },
+  authButton: { minHeight: 52, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 18 },
+  authButtonText: { fontFamily: 'Inter_600SemiBold', fontSize: 15, letterSpacing: -0.1 },
   progressSegments: { flexDirection: 'row', gap: 6, marginBottom: 22 },
-  progressSegment: { flex: 1, height: 4, borderRadius: 4 },
+  progressSegment: { flex: 1, height: 5, borderRadius: 999 },
 });
 
 export const authStyles = styles;

@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Dark Obsidian Background -->
+    <linearGradient id="monogramDarkBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0E1626" />
+      <stop offset="100%" stop-color="#090D16" />
+    </linearGradient>
+
+    <!-- Neon Glow: 0.5px inner glow feel + 0 0 20px outer aura -->
+    <filter id="monogramGlowDark" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="6" result="blur1" />
+      <feGaussianBlur stdDeviation="16" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <linearGradient id="neonGreenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00FF87" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+
+    <mask id="monogramStemWaveMask">
+      <!-- Full white mask -->
+      <rect width="512" height="512" fill="#FFFFFF" />
+      <!-- Wave cutout in black (negative space cutting through the stem) -->
+      <path d="M 80,290 C 160,250 200,310 280,265 C 330,235 390,260 440,240 C 390,285 320,260 270,295 C 210,335 150,285 80,290 Z" fill="#000000" />
+      <!-- Secondary upward momentum notch -->
+      <polygon points="256,260 276,280 256,274 236,280" fill="#000000" />
+    </mask>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#monogramDarkBg)" />
+
+  <!-- Ambient Backdrop Aura -->
+  <circle cx="256" cy="235" r="160" fill="#00FF87" opacity="0.08" filter="url(#monogramGlowDark)" />
+
+  <!-- Monogram T with 45° cuts and negative space wave -->
+  <g filter="url(#monogramGlowDark)">
+    <!-- Base T Shape masked by the digital wave -->
+    <g mask="url(#monogramStemWaveMask)">
+      <!-- Crossbar with sharp 45° cuts on terminals -->
+      <path d="M 120,130 
+               L 392,130 
+               L 392,175 
+               L 352,215 
+               L 296,215 
+               L 296,350 
+               L 336,390 
+               L 176,390 
+               L 216,350 
+               L 216,215 
+               L 160,215 
+               L 120,175 Z" 
+            fill="none" 
+            stroke="url(#neonGreenGrad)" 
+            stroke-width="12" 
+            stroke-linejoin="miter" />
+
+      <!-- Inner geometric ridge for depth & 0.5px inner glow feel -->
+      <path d="M 145,150 
+               L 367,150 
+               L 367,170 
+               L 335,202 
+               L 278,202 
+               L 278,355 
+               L 296,373 
+               L 216,373 
+               L 234,355 
+               L 234,202 
+               L 177,202 
+               L 145,170 Z" 
+            fill="#00FF87" 
+            fill-opacity="0.12" 
+            stroke="#00FF87" 
+            stroke-width="2.5" />
+    </g>
+
+    <!-- Glowing Vector Wave piercing through stem in Neon Green -->
+    <path d="M 100,285 C 170,245 210,305 280,265 C 330,238 385,258 420,242 C 380,280 320,258 270,292 C 210,332 160,282 100,285 Z" 
+          fill="url(#neonGreenGrad)" />
+
+    <!-- Sharp Upward Arrow Node at center of the wave indicating growth -->
+    <polygon points="256,238 272,260 256,254 240,260" fill="#00FF87" />
+
+    <!-- Wordmark TURIWA in custom geometric sans -->
+    <text x="256" y="445" 
+          font-family="system-ui, -apple-system, sans-serif" 
+          font-weight="700" 
+          font-size="28" 
+          letter-spacing="9" 
+          fill="#F8FAFC" 
+          text-anchor="middle">TURIWA</text>
+  </g>
+</svg>

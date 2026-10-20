@@ -1,0 +1,50 @@
+# Netlify serves the web build and the API together, so the browser only ever
+# talks to one origin and no CORS or public API host is needed.
+[build]
+  base = "artifacts/turiwa-mobile"
+  publish = "dist"
+  functions = "netlify/functions"
+
+  # `pnpm build` in the app is the Replit script: it insists on a Replit deployment
+  # domain and emits native phone bundles. A web host wants the static export, plus the
+  # API bundled into the function directory above.
+  command = "pnpm exec expo export --platform web && node ../api-server/build-netlify.mjs"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Left empty on purpose: the exported bundle then talks to whatever origin served it.
+  # A value here would freeze a developer's laptop into a public release.
+  EXPO_PUBLIC_API_URL = ""
+  # The Google sign-in button only renders when EXPO_PUBLIC_FIREBASE_API_KEY,
+  # _PROJECT_ID and _APP_ID were present at build time; without them the app offers
+  # phone + password alone. These are inlined into the bundle, so they must be set
+  # before the build runs, not afterwards.
+
+# One function answers every /api route: the ledger writes, the reports, and the
+# read-only /api/events refusal that tells the app to poll.
+#
+# Its credentials are deliberately absent. DATABASE_URL (or SUPABASE_DB_HOST together
+# with SUPABASE_DB_PASSWORD), SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY have to be set
+# as the site's environment variables. The embedded file database cannot persist here,
+# so the function refuses to start rather than accept records it will lose.
+[functions]
+  directory = "netlify/functions"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), camera=(), microphone=()"
+    X-Frame-Options = "DENY"

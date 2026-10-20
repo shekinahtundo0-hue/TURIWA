@@ -47,3 +47,26 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+.env
+/data/
+
+# The running database and its snapshots. Both hold password hashes, live session
+# tokens and members' phone numbers, so neither may reach a repository by accident.
+/artifacts/api-server/data/
+/backups/
+
+# The API bundled for Netlify's function host, written by
+# `pnpm --filter @workspace/api-server run build:netlify` from the source in src/.
+/artifacts/turiwa-mobile/netlify/
+
+# Local Netlify folder
+.netlify
+
+# Publish folders and scratch copies of them. `expo export` regenerates the bundle, and a
+# previous export kept on disk is how an old build ends up shipped by mistake.
+/artifacts/turiwa-mobile/vercel-deploy/
+/artifacts/turiwa-mobile/dist-prev/
+
+# `expo prebuild -p android` output. Regenerated from app.json, and it holds a Gradle
+# wrapper plus hundreds of Java files that no review should read as hand-written code.
+/artifacts/turiwa-mobile/android/

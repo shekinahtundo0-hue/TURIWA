@@ -14,6 +14,10 @@
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
   ],
+  "// exclude": "Leftover scaffold from a Supabase prototype; nothing imports it and the package is not installed.",
+  "exclude": [
+    "utils/supabase"
+  ],
   "references": [
     {
       "path": "../../lib/api-client-react"
