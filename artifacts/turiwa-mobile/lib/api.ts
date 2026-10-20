@@ -275,12 +275,12 @@ function defaultApiBase(): string {
 }
 
 // `EXPO_PUBLIC_API_URL` is inlined into the bundle at build time, and `.env.local` points it at a
-// developer's laptop for the emulator loop. A browser can only follow that address while it is
-// itself running on the laptop; on any deployed origin the API is the same host serving the page.
+// developer's laptop for the emulator loop. A production web export is always served by the host
+// that answers `/api`, so that laptop address must not travel with it; under `expo start` the dev
+// server has no `/api` of its own and the configured URL is the only way to reach one.
 function webApiBase(): string {
-  const configured = process.env.EXPO_PUBLIC_API_URL;
-  if (!configured) return '';
-  return /^(localhost|127\.0\.0\.1|\[?::1\]?)$/.test(window.location.hostname) ? configured : '';
+  if (process.env.NODE_ENV === 'production') return '';
+  return process.env.EXPO_PUBLIC_API_URL ?? '';
 }
 
 export const API_BASE = (Platform.OS === 'web' ? webApiBase() : (process.env.EXPO_PUBLIC_API_URL ?? defaultApiBase())).replace(/\/+$/, '');
