@@ -1,4 +1,8 @@
--- Run this in Supabase → SQL Editor so /rest/v1 can serve Turiwa tables.
+-- Supabase-side schema bootstrap. The tables themselves are created and migrated by the API
+-- (lib/db, drizzle), so this file exists to state one thing the dashboard cannot: nothing on
+-- /rest/v1 may reach members' money. The app never talks to PostgREST — the Express API
+-- connects as the table owner, which bypasses row level security by ownership, so every policy
+-- an anon or authenticated key could match has to stay revoked.
 
 create table if not exists public.users (
   id text primary key,
@@ -65,19 +69,17 @@ alter table public.contributions enable row level security;
 alter table public.loans enable row level security;
 alter table public.app_meta enable row level security;
 
+-- Revoked rather than absent: with RLS on and no permissive policy, every non-owner role is
+-- denied, and re-running this file cannot leave an open policy behind.
 drop policy if exists turiwa_circles_all on public.circles;
-create policy turiwa_circles_all on public.circles for all using (true) with check (true);
-
 drop policy if exists turiwa_contributions_all on public.contributions;
-create policy turiwa_contributions_all on public.contributions for all using (true) with check (true);
-
 drop policy if exists turiwa_loans_all on public.loans;
-create policy turiwa_loans_all on public.loans for all using (true) with check (true);
-
 drop policy if exists turiwa_app_meta_all on public.app_meta;
-create policy turiwa_app_meta_all on public.app_meta for all using (true) with check (true);
 
-grant select, insert, update, delete on public.circles, public.contributions, public.loans, public.app_meta to anon, authenticated;
+revoke all on public.circles, public.contributions, public.loans, public.app_meta from anon;
+revoke all on public.circles, public.contributions, public.loans, public.app_meta from authenticated;
+revoke all on public.users, public.sessions, public.auth_codes from anon;
+revoke all on public.users, public.sessions, public.auth_codes from authenticated;
 
 insert into public.circles (id, name, members, target, monthly, color)
 values
