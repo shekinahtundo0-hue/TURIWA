@@ -23,6 +23,7 @@ const DATABASE_ENV_NAMES = [
   "SUPABASE_DB_URL",
   "SUPABASE_DATABASE_URL",
   "SUPABASE_DB_HOST",
+  "SUPABASE_DB_USER",
   "SUPABASE_DB_PASSWORD",
   "POSTGRES_PASSWORD",
 ] as const;
@@ -32,7 +33,9 @@ function databaseConfigReport(): string {
   const missing = DATABASE_ENV_NAMES.filter((name) => !process.env[name]);
   return (
     "No database is configured, so no member's money can be read or written. Set DATABASE_URL, " +
-    "or SUPABASE_DB_HOST together with SUPABASE_DB_PASSWORD (or POSTGRES_PASSWORD). " +
+    "or SUPABASE_DB_HOST together with SUPABASE_DB_PASSWORD (or POSTGRES_PASSWORD). On the " +
+    "Supabase pooler SUPABASE_DB_USER must carry the project ref (postgres.<ref>), because the " +
+    "plain postgres default is not a tenant. " +
     `This container sees ${present.length ? `only ${present.join(", ")}` : "none of them"}` +
     `${missing.length ? `; still missing: ${missing.join(", ")}` : ""}. ` +
     "A value added on the host after the last deploy is not visible here — redeploy for it to apply."
