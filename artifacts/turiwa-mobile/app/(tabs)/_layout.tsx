@@ -6,10 +6,11 @@ import { useResponsive } from '@/hooks/useResponsive';
 import { Feather } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
-import { Tabs, usePathname, useRouter, type Href } from 'expo-router';
+import { Redirect, Tabs, usePathname, useRouter, type Href } from 'expo-router';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTuriwa } from '@/context/TuriwaContext';
 import { TuriwaLogo } from '@/components/TuriwaLogo';
 
 // IMPORTANT: iOS 26 uses NativeTabs for native tabs with liquid glass support.
@@ -198,6 +199,10 @@ function DesktopTabLayout() {
 
 export default function TabLayout() {
   const { useSidebar } = useResponsive();
+  const { authHydrated, signedIn } = useTuriwa();
+  // Behind this layout is the ledger, so a shared /circles link must not render the
+  // money shell for a visitor with no session; index.tsx only guards the entry route.
+  if (authHydrated && !signedIn) return <Redirect href="/(auth)/welcome" />;
   if (isLiquidGlassAvailable()) {
     return <NativeTabLayout />;
   }

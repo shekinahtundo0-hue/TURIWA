@@ -136,21 +136,27 @@ export function LoadingScreen({ onComplete, ready = true, minDuration = 1400, ma
     Animated.timing(barAnim, { toValue: 1, duration: reduced ? 120 : 320, easing: Easing.inOut(Easing.quad), useNativeDriver: false }).start(({ finished }) => {
       if (finished) setDone(true);
     });
+    // A tab opened in the background is never given an animation frame, so an
+    // animation callback is not a door the app may be locked behind.
+    const bail = setTimeout(() => setDone(true), reduced ? 220 : 700);
+    return () => clearTimeout(bail);
   }, [bar, barAnim, deadline, done, finishing, ready, reduced]);
 
   useEffect(() => {
     if (!done) return;
+    const finish = () => {
+      if (completed.current) return;
+      completed.current = true;
+      onComplete?.();
+    };
     Animated.timing(exitAnim, {
       toValue: 1,
       duration: reduced ? 120 : 460,
       easing: Easing.inOut(Easing.cubic),
       useNativeDriver: true,
-    }).start(() => {
-      if (!completed.current) {
-        completed.current = true;
-        onComplete?.();
-      }
-    });
+    }).start(finish);
+    const bail = setTimeout(finish, reduced ? 220 : 900);
+    return () => clearTimeout(bail);
   }, [done, exitAnim, onComplete, reduced]);
 
   const status = !finishing ? (bar < 0.5 ? 'Preparing your circles' : 'Connecting to the network') : 'Welcome';
