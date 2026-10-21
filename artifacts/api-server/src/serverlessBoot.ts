@@ -16,6 +16,29 @@ if (!process.env.DATABASE_POOL_MAX) process.env.DATABASE_POOL_MAX = "2";
 /** Raised when the deploy has no real database to write to. Both hosts answer 503. */
 export class DatabaseNotConfigured extends Error {}
 
+// Names only, never values: a 503 that lists what the container can see turns "why is the site
+// refusing?" into one identifiable gap, which is otherwise guesswork from outside the host.
+const DATABASE_ENV_NAMES = [
+  "DATABASE_URL",
+  "SUPABASE_DB_URL",
+  "SUPABASE_DATABASE_URL",
+  "SUPABASE_DB_HOST",
+  "SUPABASE_DB_PASSWORD",
+  "POSTGRES_PASSWORD",
+] as const;
+
+function databaseConfigReport(): string {
+  const present = DATABASE_ENV_NAMES.filter((name) => process.env[name]);
+  const missing = DATABASE_ENV_NAMES.filter((name) => !process.env[name]);
+  return (
+    "No database is configured, so no member's money can be read or written. Set DATABASE_URL, " +
+    "or SUPABASE_DB_HOST together with SUPABASE_DB_PASSWORD (or POSTGRES_PASSWORD). " +
+    `This container sees ${present.length ? `only ${present.join(", ")}` : "none of them"}` +
+    `${missing.length ? `; still missing: ${missing.join(", ")}` : ""}. ` +
+    "A value added on the host after the last deploy is not visible here — redeploy for it to apply."
+  );
+}
+
 /** The one route no serverless host can serve, and what it says instead. */
 export const LIVE_UPDATES_REFUSED =
   "Live updates are not available on this host. The app refreshes by polling instead.";
@@ -45,10 +68,7 @@ async function open(): Promise<Express> {
   const url = db.resolveDatabaseUrl();
   const driver = db.databaseDriver(url);
   if (driver === "pglite") {
-    throw new DatabaseNotConfigured(
-      "No database is configured. Set DATABASE_URL (or SUPABASE_DB_HOST and SUPABASE_DB_PASSWORD) " +
-        "to the Supabase connection string — the embedded file database cannot persist here.",
-    );
+    throw new DatabaseNotConfigured(databaseConfigReport());
   }
 
   // A hosted database that starts empty stays empty: the demo chama in the schema
