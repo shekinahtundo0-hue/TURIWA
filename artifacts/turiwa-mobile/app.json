@@ -31,10 +31,7 @@
       }
     },
     "extra": {
-      "apiUrl": "http://localhost:5000",
-      "supabaseUrl": "https://adxqhuypkpoekifqjadu.supabase.co",
-      "supabaseRestUrl": "https://adxqhuypkpoekifqjadu.supabase.co/rest/v1",
-      "supabasePublishableKey": "sb_publishable_3OsY2j6diDMmyoC7HRBSXQ_hD3ZXZRl"
+      "apiUrl": "http://localhost:5000"
     },
     "web": {
       "favicon": "./assets/images/icon-brand.png"

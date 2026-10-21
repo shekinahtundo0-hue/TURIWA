@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
+import { getTableName, Table } from "drizzle-orm";
 import pg from "pg";
 import { scryptSync, randomBytes, timingSafeEqual } from "node:crypto";
 import { ensureSchema, seedIfEmpty } from "./bootstrap";
 import type { AppDb } from "./client";
+import { hardenHostedSchema } from "./harden";
 import {
   databaseDriver,
   isPostgresUrl,
@@ -17,6 +19,13 @@ const { Pool } = pg;
 
 let _db: AppDb | null = null;
 let _pool: pg.Pool | null = null;
+
+/** Every table the app owns, read off the drizzle schema so the list cannot drift from it. */
+function appTableNames(): string[] {
+  return Object.values(schema)
+    .filter((value) => value instanceof Table)
+    .map((value) => getTableName(value as unknown as Table));
+}
 
 export function hashPassword(password: string): string {
   const salt = randomBytes(16).toString("hex");
@@ -69,6 +78,14 @@ export async function initDb(options: InitDbOptions = {}): Promise<AppDb> {
   }
 
   await ensureSchema(_db);
+  // A Postgres this API reaches over the network is a Postgres someone else's key can reach too.
+  // PGlite is in-process and has no such door, so only the pooled driver is hardened.
+  if (_pool) {
+    const hardened = await hardenHostedSchema(_pool, appTableNames());
+    if (hardened.length > 0) {
+      console.info(`[db] revoked public schema access from ${hardened.join(", ")}`);
+    }
+  }
   // The demo chama is a sample account whose password is in this repository. Seeding it
   // into a hosted database on first boot would put a signable-into stranger and its
   // fake group in front of real members, so the function entry opts out.
