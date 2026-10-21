@@ -136,11 +136,16 @@ export function LoadingScreen({ onComplete, ready = true, minDuration = 1400, ma
     Animated.timing(barAnim, { toValue: 1, duration: reduced ? 120 : 320, easing: Easing.inOut(Easing.quad), useNativeDriver: false }).start(({ finished }) => {
       if (finished) setDone(true);
     });
-    // A tab opened in the background is never given an animation frame, so an
-    // animation callback is not a door the app may be locked behind.
+  }, [bar, barAnim, deadline, done, finishing, ready, reduced]);
+
+  // A tab the browser opens in the background is never handed an animation frame, so the
+  // handover cannot live only in an animation callback. This is a separate effect because
+  // latching `finishing` above re-runs it, and its cleanup would cancel this timer.
+  useEffect(() => {
+    if (!finishing || done) return;
     const bail = setTimeout(() => setDone(true), reduced ? 220 : 700);
     return () => clearTimeout(bail);
-  }, [bar, barAnim, deadline, done, finishing, ready, reduced]);
+  }, [done, finishing, reduced]);
 
   useEffect(() => {
     if (!done) return;
