@@ -37,7 +37,14 @@ async function buildNetlifyFunction() {
     },
     external: ["pg-native"],
     sourcemap: "linked",
-    banner: {
+    banner: process.env.CLOUDFLARE_PAGES === "1" ? {
+      js: `import { createRequire as __bannerCrReq } from 'node:module';
+import * as __bannerHttp from 'node:http';
+import * as __bannerHttps from 'node:https';
+const __nativeRequire = __bannerCrReq('file:///turiwa-api.mjs');
+globalThis.require = (name) => name === 'http' ? __bannerHttp : name === 'https' ? __bannerHttps : __nativeRequire(name);
+    `,
+    } : {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
 import __bannerUrl from 'node:url';
