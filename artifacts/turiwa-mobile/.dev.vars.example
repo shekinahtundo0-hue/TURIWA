@@ -1,0 +1,10 @@
+# Copy this file to .dev.vars for local `wrangler pages dev` configuration.
+# Never commit real database credentials.
+SUPABASE_URL=https://adxqhuypkpoekifqjadu.supabase.co
+SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_DB_HOST=aws-0-eu-west-1.pooler.supabase.com
+SUPABASE_DB_PORT=5432
+SUPABASE_DB_NAME=postgres
+SUPABASE_DB_USER=postgres.adxqhuypkpoekifqjadu
+SUPABASE_DB_PASSWORD=
+DATABASE_SSL=true
