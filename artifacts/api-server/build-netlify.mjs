@@ -25,6 +25,9 @@ async function buildNetlifyFunction() {
     bundle: true,
     format: "esm",
     target: "node20",
+    // pg-cloudflare exposes its real TCP socket only through the `workerd` export
+    // condition. Without it, esbuild picks that package's intentional empty fallback.
+    conditions: ["workerd"],
     outfile: outFile,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
@@ -37,14 +40,7 @@ async function buildNetlifyFunction() {
     },
     external: ["pg-native"],
     sourcemap: "linked",
-    banner: process.env.CLOUDFLARE_PAGES === "1" ? {
-      js: `import { createRequire as __bannerCrReq } from 'node:module';
-import * as __bannerHttp from 'node:http';
-import * as __bannerHttps from 'node:https';
-const __nativeRequire = __bannerCrReq('file:///turiwa-api.mjs');
-globalThis.require = (name) => name === 'http' ? __bannerHttp : name === 'https' ? __bannerHttps : __nativeRequire(name);
-    `,
-    } : {
+    banner: {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
 import __bannerUrl from 'node:url';
@@ -162,7 +158,10 @@ async function isDirectory(target) {
 }
 
 async function main() {
-  await buildNetlifyFunction();
+  // A Cloudflare Pages build serves the same `dist` but runs the API on the Node host, so it
+  // must not overwrite netlify/functions/api.mjs with anything: it only needs the routing files
+  // and the asset rename applied to the fresh export.
+  if (process.env.EXPORT_ONLY !== "1") await buildNetlifyFunction();
   await writeRoutingFiles();
   await shipDottedAssets();
 }

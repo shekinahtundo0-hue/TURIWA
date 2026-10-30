@@ -1,5 +1,5 @@
 import serverless from "serverless-http";
-import { bootServer, DatabaseNotConfigured, LIVE_UPDATES_REFUSED } from "./serverlessBoot";
+import { createFetchHandler } from "./fetchHandler";
 
 // Netlify invokes this once per request and may freeze the container afterwards, so there is
 // no `app.listen` here. The database work that normally happens at startup lives in
@@ -12,9 +12,6 @@ type NetlifyResult = {
   headers: Record<string, string>;
   body: string;
 };
-
-/** The subset of the v2 function context this file passes through. */
-type NetlifyContext = { request: Request; next?: () => Promise<Response> };
 
 /** `serverless-http` is written against the AWS API Gateway event, whose request path,
  *  client address and body encoding differ from the web `Request` Netlify hands a v2
@@ -47,55 +44,10 @@ function toResponse(result: NetlifyResult): Response {
   });
 }
 
-function json(statusCode: number, message: string): Response {
-  return new Response(JSON.stringify({ message }), {
-    status: statusCode,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
-
-let handling: Promise<(event: object, context: object) => Promise<NetlifyResult>> | null = null;
-
-function warmUp() {
-  if (!handling) {
-    handling = bootServer().then(
-      (app) =>
-        serverless(app, { provider: "aws" }) as (
-          event: object,
-          context: object,
-        ) => Promise<NetlifyResult>,
-    );
-    // The shared boot clears its own cache when opening the database fails; this one has to
-    // drop the wrapper too, or a later request would await a promise that already rejected.
-    handling.catch(() => {
-      handling = null;
-    });
-  }
-  return handling;
-}
-
-export default async function handler(
-  request: Request,
-  _context: NetlifyContext,
-): Promise<Response> {
-  // A serverless invocation ends when the handler returns, so a stream that is meant to
-  // stay open for hours cannot be served here. Refusing it immediately is what lets the
-  // app switch to polling; holding the connection until the function times out would
-  // instead stall every screen that opens it.
-  if (new URL(request.url).pathname === "/api/events") {
-    return json(501, LIVE_UPDATES_REFUSED);
-  }
-
-  try {
-    const handle = await warmUp();
-    return toResponse(await handle(await toApiGatewayEvent(request), {}));
-  } catch (err) {
-    const message =
-      err instanceof DatabaseNotConfigured
-        ? err.message
-        : err instanceof Error
-          ? `API request failed: ${err.message}`
-          : "API request failed";
-    return json(err instanceof DatabaseNotConfigured ? 503 : 500, message);
-  }
-}
+export default createFetchHandler((app) => {
+  const handle = serverless(app, { provider: "aws" }) as (
+    event: object,
+    context: object,
+  ) => Promise<NetlifyResult>;
+  return async (request) => toResponse(await handle(await toApiGatewayEvent(request), {}));
+});

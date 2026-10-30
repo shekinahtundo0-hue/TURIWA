@@ -6,13 +6,9 @@
     "nodejs_compat"
   ],
   "vars": {
-    "SUPABASE_URL": "https://adxqhuypkpoekifqjadu.supabase.co",
-    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_3OsY2j6diDMmyoC7HRBSXQ_hD3ZXZRl",
     "SUPABASE_DB_HOST": "aws-0-eu-west-1.pooler.supabase.com",
-    "SUPABASE_DB_PORT": "5432",
+    "SUPABASE_DB_PORT": "6543",
     "SUPABASE_DB_NAME": "postgres",
-    "SUPABASE_DB_USER": "postgres.adxqhuypkpoekifqjadu",
-    "DATABASE_SSL": "true",
-    "DATABASE_POOL_MAX": "2"
+    "SUPABASE_DB_USER": "postgres.adxqhuypkpoekifqjadu"
   }
 }

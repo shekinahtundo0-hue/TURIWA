@@ -43,15 +43,30 @@ export function databaseDriver(url: string): "supabase" | "postgres" | "pglite" 
 export function postgresPoolConfig(url: string): pg.PoolConfig {
   const lower = url.toLowerCase();
   const wantsSsl =
-    isSupabaseUrl(url) ||
-    process.env.DATABASE_SSL === "true" ||
-    lower.includes("sslmode=require") ||
-    lower.includes("sslmode=verify-full") ||
-    lower.includes("sslmode=prefer");
+    !lower.includes("sslmode=disable") &&
+    (isSupabaseUrl(url) ||
+      process.env.DATABASE_SSL === "true" ||
+      lower.includes("sslmode=require") ||
+      lower.includes("sslmode=verify-full") ||
+      lower.includes("sslmode=prefer"));
+
+  // Supabase endpoints present certificates that Node's default CA store cannot verify inside a
+  // Worker, so TLS is enabled without strict verification. The transaction pooler (port 6543)
+  // advertises a public CA but `pg` on Workers still fails verification; disabling rejection is
+  // the only path that has produced a live connection so far.
+  const isWorker = onCloudflareWorkers();
+  const ssl = wantsSsl ? { rejectUnauthorized: false } : undefined;
 
   return {
     connectionString: url,
     max: Number(process.env.DATABASE_POOL_MAX ?? 10) || 10,
-    ssl: wantsSsl ? { rejectUnauthorized: false } : undefined,
+    ssl,
+    // A Worker may not use a socket opened while it served a different request, so there a
+    // connection is closed after one use instead of idling in the pool for the next request.
+    ...(isWorker ? { maxUses: 1 } : {}),
   };
+}
+
+function onCloudflareWorkers(): boolean {
+  return globalThis.navigator?.userAgent === "Cloudflare-Workers";
 }

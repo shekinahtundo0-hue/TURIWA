@@ -1,6 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Express } from "express";
-import { bootServer, DatabaseNotConfigured, LIVE_UPDATES_REFUSED } from "./serverlessBoot";
+import {
+  bootServer,
+  DatabaseNotConfigured,
+  failedStatement,
+  LIVE_UPDATES_REFUSED,
+  publicFailureMessage,
+} from "./serverlessBoot";
 
 // Vercel's Node function contract is the one Express already speaks: a request and a response
 // object, with the invocation ending when the handler returns. So unlike the Netlify wrapper
@@ -50,9 +56,21 @@ export default async function handler(
       refuse(res, 503, err.message);
       return;
     }
+    // The SQL a failed Drizzle query carries is our column layout, so it stays out of the
+    // response and goes to the platform log instead.
+    if (err instanceof Error) {
+      const cause = err.cause instanceof Error ? err.cause : undefined;
+      console.error("API handler failed", {
+        name: err.name,
+        message: failedStatement(err),
+        causeName: cause?.name,
+        causeMessage: cause?.message,
+        causeCode: cause && "code" in cause ? cause.code : undefined,
+      });
+    }
     // A failed boot must not be remembered: the next invocation tries the database again, so
     // a briefly unreachable Postgres heals without a redeploy.
     serving = null;
-    refuse(res, 500, `API request failed: ${err instanceof Error ? err.message : "unknown error"}`);
+    refuse(res, 500, publicFailureMessage(err));
   }
 }

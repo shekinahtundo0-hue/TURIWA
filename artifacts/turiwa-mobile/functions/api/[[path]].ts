@@ -1,39 +1,41 @@
 type PagesContext = {
   request: Request;
-  env: Record<string, string | undefined>;
+  env: Record<string, unknown>;
 };
 
-type ApiHandler = (request: Request, context: { request: Request }) => Promise<Response>;
-
-const runtime = globalThis as typeof globalThis & {
-  process: { env: Record<string, string | undefined> };
-};
+const DB_ENV_NAMES = [
+  "DATABASE_URL",
+  "SUPABASE_DB_URL",
+  "SUPABASE_DATABASE_URL",
+  "SUPABASE_DB_HOST",
+  "SUPABASE_DB_PORT",
+  "SUPABASE_DB_NAME",
+  "SUPABASE_DB_USER",
+  "SUPABASE_DB_PASSWORD",
+  "POSTGRES_PASSWORD",
+  "DATABASE_SSL",
+  "DATABASE_POOL_MAX",
+];
 
 export async function onRequest(context: PagesContext): Promise<Response> {
-  // Cloudflare exposes Pages bindings on the request context. The existing API bundle
-  // reads process.env, so bridge only the runtime variables it already understands.
-  for (const name of [
-    "DATABASE_URL",
-    "SUPABASE_DB_URL",
-    "SUPABASE_DATABASE_URL",
-    "SUPABASE_DB_HOST",
-    "SUPABASE_DB_PORT",
-    "SUPABASE_DB_NAME",
-    "SUPABASE_DB_USER",
-    "SUPABASE_DB_PASSWORD",
-    "POSTGRES_PASSWORD",
-    "DATABASE_SSL",
-    "DATABASE_POOL_MAX",
-    "SUPABASE_URL",
-    "SUPABASE_PUBLISHABLE_KEY",
-  ]) {
+  for (const name of DB_ENV_NAMES) {
     const value = context.env[name];
-    if (value !== undefined) runtime.process.env[name] = value;
+    if (typeof value === "string" && value !== "") {
+      process.env[name] = value;
+    }
   }
 
-  const { default: handle } = (await import("../../netlify/functions/api.mjs")) as {
-    default: ApiHandler;
-  };
-
-  return handle(context.request, { request: context.request });
+  try {
+    const { default: handler } = await import("./cloudflare-bundle.mjs");
+    return await (handler as (request: Request) => Promise<Response>)(context.request);
+  } catch (err) {
+    console.error("Pages API function failed", err);
+    return new Response(
+      JSON.stringify({ message: "The API could not start on this host." }),
+      {
+        status: 500,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    );
+  }
 }

@@ -59,8 +59,19 @@ Thumbs.db
 # `pnpm --filter @workspace/api-server run build:netlify` from the source in src/.
 /artifacts/turiwa-mobile/netlify/
 
+# The API bundled for Cloudflare Pages, written by
+# `pnpm --filter @workspace/api-server run build:cloudflare-api` from the source in src/.
+/artifacts/turiwa-mobile/functions/api/cloudflare-bundle.mjs
+/artifacts/turiwa-mobile/functions/api/cloudflare-bundle.mjs.map
+
+# `wrangler pages dev` console output.
+/artifacts/turiwa-mobile/dev.log
+
 # Local Netlify folder
 .netlify
+
+# `wrangler pages dev` state and scratch bundles, written next to the Pages project root.
+.wrangler/
 
 # Publish folders and scratch copies of them. `expo export` regenerates the bundle, and a
 # previous export kept on disk is how an old build ends up shipped by mistake.

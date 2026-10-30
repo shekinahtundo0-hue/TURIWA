@@ -60,10 +60,15 @@ export async function initDb(options: InitDbOptions = {}): Promise<AppDb> {
 
   const url = resolveDatabaseUrl();
   const isPostgres = isPostgresUrl(url);
+  let db: AppDb;
+  let pool: pg.Pool | null = null;
 
   if (isPostgres) {
-    _pool = new Pool(postgresPoolConfig(url));
-    _db = drizzlePg(_pool, { schema });
+    pool = new Pool(postgresPoolConfig(url));
+    pool.on("error", (err) => {
+      console.error("[db] pool connection error", err);
+    });
+    db = drizzlePg(pool, { schema });
   } else {
     const dataDir = url.startsWith("pglite://")
       ? url.slice("pglite://".length)
@@ -74,18 +79,27 @@ export async function initDb(options: InitDbOptions = {}): Promise<AppDb> {
     const { drizzle: drizzlePglite } = await import("drizzle-orm/pglite");
     const client = new PGlite(abs);
     await client.waitReady;
-    _db = drizzlePglite(client, { schema }) as unknown as AppDb;
+    db = drizzlePglite(client, { schema }) as unknown as AppDb;
   }
 
-  await ensureSchema(_db);
-  // A Postgres this API reaches over the network is a Postgres someone else's key can reach too.
-  // PGlite is in-process and has no such door, so only the pooled driver is hardened.
-  if (_pool) {
-    const hardened = await hardenHostedSchema(_pool, appTableNames());
-    if (hardened.length > 0) {
-      console.info(`[db] revoked public schema access from ${hardened.join(", ")}`);
+  // Nothing is cached until the schema and hardening have both succeeded: a retry after a failed
+  // boot must start from the schema again, not query a half-initialised connection.
+  try {
+    await ensureSchema(db);
+    // A Postgres this API reaches over the network is a Postgres someone else's key can reach too.
+    // PGlite is in-process and has no such door, so only the pooled driver is hardened.
+    if (pool) {
+      const hardened = await hardenHostedSchema(pool, appTableNames());
+      if (hardened.length > 0) {
+        console.info(`[db] revoked public schema access from ${hardened.join(", ")}`);
+      }
     }
+  } catch (error) {
+    await pool?.end().catch(() => {});
+    throw error;
   }
+  _db = db;
+  _pool = pool;
   // The demo chama is a sample account whose password is in this repository. Seeding it
   // into a hosted database on first boot would put a signable-into stranger and its
   // fake group in front of real members, so the function entry opts out.
