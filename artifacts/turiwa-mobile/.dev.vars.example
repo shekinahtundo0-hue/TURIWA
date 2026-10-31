@@ -9,3 +9,9 @@ SUPABASE_DB_USER=postgres.adxqhuypkpoekifqjadu
 SUPABASE_DB_PASSWORD=
 DATABASE_SSL=true
 # Alternatively, set DATABASE_URL to your project's transaction-pooler URI.
+
+# Firebase Google sign-in runtime configuration for local Pages Functions.
+FIREBASE_API_KEY=AIzaSyBZxvTRthNQdVDOOMJS0R5ZWnoY3OR2SiY
+FIREBASE_PROJECT_ID=turiwa-app
+# Set to the Web OAuth client ID from Google Cloud Console > APIs & Services > Credentials.
+GOOGLE_CLIENT_ID=

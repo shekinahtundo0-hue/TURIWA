@@ -309,6 +309,14 @@ it is not the live Expo app or API.
   build variables because Expo compiles them into the web bundle. Database host/user values are
   intentionally not hard-coded, so a deployment cannot silently connect to an old Supabase
   project.
+- **Google web sign-in:** The web app uses Firebase `signInWithPopup` with the account-selection
+  prompt (`select_account`) and falls back to redirect if the browser blocks popups. Set the
+  `EXPO_PUBLIC_FIREBASE_*` values from Firebase's web-app config as Cloudflare Pages Production
+  build variables, then rebuild. Set `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, and the Web
+  OAuth `GOOGLE_CLIENT_ID` as Pages Function runtime variables. Enable Google under Firebase
+  Authentication sign-in providers and add the deployed site domain to Firebase's authorized
+  domains. The browser Firebase config is public; database passwords and OAuth client secrets
+  are not.
 - **Netlify/Vercel deployments:** Expo exports the web app to `dist`; the host-specific API
   build scripts bundle the API and write host routing/security files. These serverless API
   bundles require persistent Postgres and deliberately reject embedded PGlite.
