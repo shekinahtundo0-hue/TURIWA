@@ -13,7 +13,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://turiwa-mobile.netlify.app"
+        "EXPO_PUBLIC_API_URL": "https://turiwa-api.shekinahtundo0.workers.dev"
       }
     },
     "production": {
@@ -22,7 +22,7 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://turiwa-mobile.netlify.app"
+        "EXPO_PUBLIC_API_URL": "https://turiwa-api.shekinahtundo0.workers.dev"
       }
     }
   }

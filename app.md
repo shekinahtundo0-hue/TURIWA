@@ -130,7 +130,7 @@ and route groups. The same UI targets iOS, Android and web.
 | `eas.json` | EAS development, preview and production build profiles, including Android APK/App Bundle output and deployment API URL values. |
 | `metro.config.js` | Starts Metro from Expo's default Metro configuration. |
 | `tsconfig.json` | Extends Expo TypeScript settings, enables strict mode and the `@/` path alias, references the shared API client and excludes the unused Supabase helper folder. |
-| `wrangler.jsonc` | Cloudflare Worker entry point, static asset directory, SPA fallback, API routing, compatibility settings and non-secret database connection metadata. |
+| `wrangler.jsonc` | Cloudflare Worker entry point, static asset directory, SPA fallback, API routing and compatibility settings. Database credentials are configured separately as Worker runtime secrets. |
 | `.dev.vars.example` | Example local Cloudflare Worker environment file. |
 | `.gitignore` | Ignores generated/local Expo and Cloudflare files. |
 | `.replit-artifact/artifact.toml` | Replit artifact metadata for the mobile package. |
@@ -301,9 +301,14 @@ it is not the live Expo app or API.
   `artifacts/turiwa-mobile`, use `cd ../.. && corepack pnpm@10 --filter
   @workspace/turiwa-mobile run build:cloudflare` as the build command, and use
   `npx wrangler deploy` as the deploy command. The root manifest pins pnpm 10 so its workspace
-  lockfile configuration is honored. Configure database and Firebase verification values as
-  runtime variables/secrets; configure `EXPO_PUBLIC_FIREBASE_*` as build variables because Expo
-  compiles them into the web bundle.
+  lockfile configuration is honored. The Worker is named `turiwa-api`; native EAS preview and
+  production builds use its `workers.dev` API origin. Set `DATABASE_URL` as a Worker runtime
+  secret using the current Supabase project's transaction-pooler connection string; do not put
+  it in build variables or source control. Configure `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, and
+  `GOOGLE_CLIENT_ID` as Worker runtime variables, and configure `EXPO_PUBLIC_FIREBASE_*` as
+  build variables because Expo compiles them into the web bundle. Database host/user values are
+  intentionally not hard-coded, so a deployment cannot silently connect to an old Supabase
+  project.
 - **Netlify/Vercel deployments:** Expo exports the web app to `dist`; the host-specific API
   build scripts bundle the API and write host routing/security files. These serverless API
   bundles require persistent Postgres and deliberately reject embedded PGlite.
