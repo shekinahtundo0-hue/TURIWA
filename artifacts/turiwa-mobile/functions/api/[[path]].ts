@@ -3,27 +3,10 @@ type PagesContext = {
   env: Record<string, unknown>;
 };
 
-const DB_ENV_NAMES = [
-  "DATABASE_URL",
-  "SUPABASE_DB_URL",
-  "SUPABASE_DATABASE_URL",
-  "SUPABASE_DB_HOST",
-  "SUPABASE_DB_PORT",
-  "SUPABASE_DB_NAME",
-  "SUPABASE_DB_USER",
-  "SUPABASE_DB_PASSWORD",
-  "POSTGRES_PASSWORD",
-  "DATABASE_SSL",
-  "DATABASE_POOL_MAX",
-];
+import { applyRuntimeEnvironment } from "./runtime-env";
 
 export async function onRequest(context: PagesContext): Promise<Response> {
-  for (const name of DB_ENV_NAMES) {
-    const value = context.env[name];
-    if (typeof value === "string" && value !== "") {
-      process.env[name] = value;
-    }
-  }
+  applyRuntimeEnvironment(context.env);
 
   try {
     const { default: handler } = await import("./cloudflare-bundle.mjs");

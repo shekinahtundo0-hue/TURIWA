@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 
 // The local .env.local points at a developer's localhost. A Pages deployment is
 // same-origin, so make that explicit before Expo inlines the API base into the bundle.
@@ -52,6 +52,11 @@ await writeFile(path.join(dist, "_redirects"), "/*    /index.html   200\n", "utf
 await writeFile(
   path.join(dist, "_routes.json"),
   JSON.stringify({ version: 1, include: ["/api/*"], exclude: [] }, null, 2) + "\n",
+  "utf8",
+);
+await writeFile(
+  path.join(dist, ".assetsignore"),
+  "_redirects\n_headers\n_routes.json\n",
   "utf8",
 );
 
@@ -128,3 +133,5 @@ async function isDirectory(target) {
 }
 
 await flattenAssetPaths();
+await rm(path.join(dist, "_redirects"), { force: true });
+await rm(path.join(dist, "_routes.json"), { force: true });
