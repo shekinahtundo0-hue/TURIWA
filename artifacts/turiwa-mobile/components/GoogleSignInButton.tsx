@@ -65,6 +65,18 @@ function WebGoogleSignIn() {
     }
   };
 
+  // The redirect branch above deliberately leaves the spinner up while the page leaves for
+  // Google. If that navigation never happens, nothing else would ever clear it. The window is
+  // long enough that someone typing a password or a second factor is never cut off.
+  useEffect(() => {
+    if (!busy) return;
+    const watchdog = setTimeout(() => {
+      setBusy(false);
+      setError('Google sign-in did not finish. Close the Google window if it is still open, then try again.');
+    }, 120_000);
+    return () => clearTimeout(watchdog);
+  }, [busy]);
+
   return <GoogleButton busy={busy} error={error} start={start} />;
 }
 
@@ -85,6 +97,18 @@ function NativeGoogleSignIn() {
 
 function GoogleButton({ busy, error, start }: GoogleFlow) {
   const colors = useColors();
+  // The provider window can sit open, or behind this one, for as long as the person takes.
+  // Saying so beats an unexplained spinner that looks like the app has hung.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!busy) {
+      setSlow(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlow(true), 8_000);
+    return () => clearTimeout(timer);
+  }, [busy]);
+
   return (
     <View style={styles.wrap}>
       <Pressable
@@ -109,6 +133,11 @@ function GoogleButton({ busy, error, start }: GoogleFlow) {
         )}
         <Text style={[styles.text, { color: colors.foreground }]}>{busy ? 'Connecting…' : 'Continue with Google'}</Text>
       </Pressable>
+      {busy && slow ? (
+        <Text style={[styles.hint, { color: colors.mutedForeground }]}>
+          Still waiting for Google. Finish signing in in the window that opened, or close it to try again.
+        </Text>
+      ) : null}
       {error ? <Text style={[styles.error, { color: colors.destructive }]}>{error}</Text> : null}
     </View>
   );
@@ -129,6 +158,7 @@ const styles = StyleSheet.create({
   wrap: { gap: 9 },
   button: { minHeight: 54, borderRadius: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
   text: { fontFamily: 'Inter_600SemiBold', fontSize: 15 },
+  hint: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17, marginTop: 9, textAlign: 'center' },
   error: { fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 9, textAlign: 'center' },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 20 },
   dividerLine: { flex: 1, height: 1 },

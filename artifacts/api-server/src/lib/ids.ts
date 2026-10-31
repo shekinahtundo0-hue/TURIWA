@@ -5,6 +5,10 @@ export function newId(prefix?: string): string {
   return prefix ? `${prefix}-${id}` : id;
 }
 
+export function newJoinCode(): string {
+  return randomBytes(8).toString("hex");
+}
+
 export function normalizePhone(phone: string): string {
   const trimmed = phone.trim().replace(/[\s-]/g, "");
   if (trimmed.startsWith("0") && trimmed.length >= 9) {

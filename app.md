@@ -202,11 +202,9 @@ and route groups. The same UI targets iOS, Android and web.
 | `assets/images/splash-mark.png` | Mark used on the native splash screen. |
 | `assets/brand/icon/` | Bundled Android adaptive background/foreground and iOS app icon. |
 | `assets/brand/logo/` | Dark/light Turiwa mark and monogram SVGs. |
-| `functions/api/[[path]].ts` | Cloudflare Pages catch-all API entry retained for Pages deployments; copies runtime configuration into the process and forwards requests to the generated API bundle. |
-| `functions/api/runtime-env.ts` | Copies allowlisted Cloudflare runtime variables, including database and Google verification settings, into the Node-compatible Worker process environment. |
+| `functions/api/[[path]].ts` | Cloudflare Pages catch-all API proxy. It forwards `/api/*` requests through the `API` service binding to the separate `turiwa-api` Worker. |
 | `scripts/build.js` | Replit-oriented Expo build script. Produces platform bundles/manifests and prepares a static-build directory. |
-| `scripts/build-cloudflare.mjs` | Exports the web app, builds the Cloudflare API bundle, preserves response headers, removes Pages-only routing files and flattens asset paths Cloudflare would otherwise omit. |
-| `worker.ts` | Cloudflare Worker entry point. Routes `/api/*` to the Express API bundle and serves other requests from the exported static app assets. |
+| `scripts/build-cloudflare.mjs` | Exports the web app, preserves response headers, removes generated Pages routing files and flattens asset paths Cloudflare would otherwise omit. The API Worker is built separately from `artifacts/api-server`. |
 | `server/serve.js` | Dependency-free Node server for a generated Expo static build; serves platform manifests, a landing page and static files. |
 | `server/templates/landing-page.html` | HTML template used by `server/serve.js` for the Expo landing/download page. |
 | `server/` | Supporting code/template for serving the package's generated static native/web build. |
@@ -297,23 +295,24 @@ it is not the live Expo app or API.
 - **Local client:** `pnpm mobile` starts Expo. A native emulator/device needs an API URL it can
   reach; the Android emulator commonly uses `http://10.0.2.2:5000`, rather than its own
   `localhost`.
-- **Cloudflare Workers deployment:** Set the Workers Build root directory to
-  `artifacts/turiwa-mobile`, use `cd ../.. && corepack pnpm@10 --filter
-  @workspace/turiwa-mobile run build:cloudflare` as the build command, and use
-  `npx wrangler deploy` as the deploy command. The root manifest pins pnpm 10 so its workspace
-  lockfile configuration is honored. The Worker is named `turiwa-api`; native EAS preview and
-  production builds use its `workers.dev` API origin. Set `DATABASE_URL` as a Worker runtime
-  secret using the current Supabase project's transaction-pooler connection string; do not put
-  it in build variables or source control. Configure `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, and
-  `GOOGLE_CLIENT_ID` as Worker runtime variables, and configure `EXPO_PUBLIC_FIREBASE_*` as
-  build variables because Expo compiles them into the web bundle. Database host/user values are
-  intentionally not hard-coded, so a deployment cannot silently connect to an old Supabase
-  project.
+- **Cloudflare deployment:** The `turiwa-mobile` Pages project serves the Expo web export.
+  Build with root directory `artifacts/turiwa-mobile`, command `pnpm run build:cloudflare`,
+  output `dist`. Its Pages Function forwards `/api/*` to the `turiwa-api` Worker using the
+  `API` service binding. Build the Worker separately with root directory `artifacts/api-server`,
+  command `cd ../.. && corepack pnpm@10 install --frozen-lockfile && corepack pnpm@10 --filter
+  @workspace/api-server run build:cloudflare`, then deploy from that directory with
+  `npx wrangler deploy`. The root manifest pins pnpm 10 so the workspace lockfile configuration
+  is honored. The API Worker uses the configured Hyperdrive binding to reach Supabase; its
+  connection string belongs in the Hyperdrive configuration, not in Git or a build variable.
+  Configure `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, and `GOOGLE_CLIENT_ID` as runtime
+  variables on the API Worker. Configure `EXPO_PUBLIC_FIREBASE_*` as Pages build variables,
+  because Expo compiles them into the web bundle. Native EAS preview and production builds use
+  the API Worker `workers.dev` origin.
 - **Google web sign-in:** The web app uses Firebase `signInWithPopup` with the account-selection
   prompt (`select_account`) and falls back to redirect if the browser blocks popups. Set the
   `EXPO_PUBLIC_FIREBASE_*` values from Firebase's web-app config as Cloudflare Pages Production
-  build variables, then rebuild. Set `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, and the Web
-  OAuth `GOOGLE_CLIENT_ID` as Pages Function runtime variables. Enable Google under Firebase
+  and Preview build variables, then rebuild. Set `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, and
+  the Web OAuth `GOOGLE_CLIENT_ID` as runtime variables on the `turiwa-api` Worker. Enable Google under Firebase
   Authentication sign-in providers and add the deployed site domain to Firebase's authorized
   domains. The browser Firebase config is public; database passwords and OAuth client secrets
   are not.

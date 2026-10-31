@@ -19,6 +19,9 @@ export type CircleMemberRow = {
 
 export const circlesTable = pgTable("circles", {
   id: text("id").primaryKey(),
+  // A private, shareable code lets a signed-in account join without exposing
+  // circle discovery or relying on the database row id as a secret.
+  joinCode: text("join_code").unique(),
   name: text("name").notNull(),
   // Head of active roster entries, kept in step with membersList.
   members: integer("members").notNull(),
@@ -29,6 +32,10 @@ export const circlesTable = pgTable("circles", {
   frequency: text("frequency").notNull().default("Monthly"),
   joiningFee: integer("joining_fee").notNull().default(0),
   welfare: integer("welfare").notNull().default(0),
+  // The admin's own rule for a missed contribution. Zero means the group charges
+  // no fine. The app never charges it by itself: the admin applies it to a member
+  // who is behind, and the ledger records it as money received.
+  lateFine: integer("late_fine").notNull().default(0),
   loanInterestPercent: integer("loan_interest_percent").notNull().default(5),
   loanInterestPeriod: text("loan_interest_period").$type<InterestPeriod>().notNull().default("Month"),
   // The member who opened the group is its first admin.

@@ -21,17 +21,8 @@ const exported = spawnSync(process.execPath, [expoCli, "export", "--platform", "
 if (exported.error) throw exported.error;
 if (exported.status !== 0) process.exit(exported.status ?? 1);
 
-// The Pages Function runs the API directly inside workerd using `cloudflare:node` + Express.
-// That requires a separate bundle because wrangler's own bundler cannot resolve the workspace
-// packages and the `workerd` export conditions the Postgres driver needs.
-const apiBundleBuild = spawnSync(process.execPath, ["../api-server/build-cloudflare-api.mjs"], {
-  cwd: appRoot,
-  env: process.env,
-  stdio: "inherit",
-});
-
-if (apiBundleBuild.error) throw apiBundleBuild.error;
-if (apiBundleBuild.status !== 0) process.exit(apiBundleBuild.status ?? 1);
+// The API is a separate Worker (`artifacts/api-server`), so this export carries no server code.
+// Pages only forwards `/api/*` to that Worker over its service binding.
 
 // The Netlify build script still owns the asset rename and security headers. EXPORT_ONLY keeps it
 // from producing the Netlify function bundle, which this deploy no longer uses.

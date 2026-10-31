@@ -164,6 +164,7 @@ export default function StatementScreen() {
           />
           <BridgeLine label="Contributions received" value={statement.contributions} sign="+" tone="income" />
           <BridgeLine label="Loan repayments received" value={statement.repaid} sign="+" tone="income" />
+          <BridgeLine label="Late fines received" value={statement.fines} sign="+" tone="income" />
           <BridgeLine label="Expenses paid" value={statement.expenses} sign="−" tone="expense" />
           <BridgeLine label="Welfare still held back" value={statement.welfare} sign="−" tone="balance" />
           <BridgeLine label="Loan money handed over" value={statement.paidOut} sign="−" tone="balance" />

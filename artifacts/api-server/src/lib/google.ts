@@ -42,9 +42,24 @@ const TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
 let signingCerts: Record<string, string> | null = null;
 let signingCertsLoadedAt = 0;
 
+// The sign-in request stays open for as long as these calls do, and the app shows
+// "Connecting…" until the API answers. A Google endpoint that never responds must end the
+// check, not hang the sign-in.
+const OUTBOUND_TIMEOUT_MS = 8_000;
+
+async function fetchWithDeadline(url: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OUTBOUND_TIMEOUT_MS);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function loadSigningCerts(): Promise<Record<string, string>> {
   if (signingCerts && Date.now() - signingCertsLoadedAt < 15 * 60 * 1000) return signingCerts;
-  const response = await fetch(SIGNING_CERTS_URL);
+  const response = await fetchWithDeadline(SIGNING_CERTS_URL);
   if (!response.ok) throw new Error("SIGNING_CERTS_UNAVAILABLE");
   signingCerts = (await response.json()) as Record<string, string>;
   signingCertsLoadedAt = Date.now();
@@ -82,7 +97,7 @@ async function verifySignedToken(idToken: string): Promise<TokenPayload | null> 
 
 async function fetchPayload(url: string): Promise<TokenPayload | null> {
   try {
-    const response = await fetch(url);
+    const response = await fetchWithDeadline(url);
     if (!response.ok) return null;
     return (await response.json()) as TokenPayload;
   } catch {

@@ -1,0 +1,25 @@
+{
+  "name": "turiwa-api",
+  "main": "dist/cloudflare-worker.mjs",
+  "compatibility_date": "2026-10-22",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "1645b770eb5341f9b6c4228cc60e47df"
+    }
+  ],
+  "vars": {
+    "SUPABASE_DB_HOST": "aws-0-eu-west-1.pooler.supabase.com",
+    "SUPABASE_DB_PORT": "6543",
+    "SUPABASE_DB_NAME": "postgres",
+    "SUPABASE_DB_USER": "postgres.adxqhuypkpoekifqjadu",
+    "FIREBASE_API_KEY": "AIzaSyBZxvTRthNQdVDOOMJS0R5ZWnoY3OR2SiY",
+    "FIREBASE_PROJECT_ID": "turiwa-app"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

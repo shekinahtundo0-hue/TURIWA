@@ -16,10 +16,12 @@ create table if not exists public.users (
 
 create table if not exists public.circles (
   id text primary key,
+  join_code text unique,
   name text not null,
   members integer not null,
   target integer not null,
   monthly integer not null,
+  late_fine integer not null default 0,
   color text not null
 );
 

@@ -29,7 +29,9 @@ export type Finance = {
   contributed: number;
   /** What borrowers have paid back. */
   repaid: number;
-  /** Money in: contributions and repayments together. */
+  /** Money members handed over as late-contribution fines. */
+  fines: number;
+  /** Money in: contributions, repayments and fines together. */
   inflow: number;
   /** Money the group spent. */
   outflow: number;
@@ -88,10 +90,16 @@ type TuriwaContextValue = {
   profileName: string;
   user: AuthUser | null;
   live: boolean;
+  /** Why the app is not showing the database's figures right now, empty while all is well. */
+  liveError: string;
   refreshing: boolean;
   refresh: () => Promise<void>;
   addContribution: (amount: number, note: string, circleId?: string, entry?: LedgerEntry) => Promise<void>;
   createCircle: (draft: GroupDraft) => Promise<void>;
+  joinCircle: (code: string) => Promise<void>;
+  deleteCircle: (circleId: string) => Promise<void>;
+  setCircleFine: (circleId: string, lateFine: number) => Promise<void>;
+  applyFine: (circleId: string, memberId: string) => Promise<void>;
   applyForLoan: (amount: number, purpose: string, circleId?: string) => Promise<void>;
   repayLoan: (amount: number, loanId?: string) => Promise<void>;
   approveLoan: (loanId: string) => Promise<void>;
@@ -146,6 +154,7 @@ function normalizeCircle(raw: Partial<Circle> & { monthly?: number }, user: Auth
 
   return {
     id: raw.id ?? '',
+    joinCode: raw.joinCode ?? '',
     name: raw.name ?? '',
     // Someone the app cannot name is not a member, and an invite nobody has
     // answered is not either, so the headcount is the active roster.
@@ -156,6 +165,9 @@ function normalizeCircle(raw: Partial<Circle> & { monthly?: number }, user: Auth
     frequency: raw.frequency ?? 'Monthly',
     joiningFee: raw.joiningFee ?? 0,
     welfare: raw.welfare ?? 0,
+    // A group opened before fines existed charges none, which is what zero means.
+    lateFine: raw.lateFine ?? 0,
+    cycleStart: raw.cycleStart,
     loanInterestPercent: raw.loanInterestPercent ?? 5,
     loanInterestPeriod: raw.loanInterestPeriod ?? 'Month',
     createdBy: raw.createdBy ?? null,
@@ -208,6 +220,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const [signedIn, setSignedIn] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [live, setLive] = useState(false);
+  const [liveError, setLiveError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
   const userId = user?.id ?? '';
@@ -225,6 +238,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     setContributions(normalizedRows);
     setLoans(normalizedLoans);
     setLive(true);
+    setLiveError('');
     if (!userId) return;
     await Promise.all([
       AsyncStorage.setItem(cacheKey(userId, 'circles'), JSON.stringify(normalizedCircles)),
@@ -305,9 +319,14 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    return api.subscribeToState((state) => {
-      void applyState(state);
-    });
+    return api.subscribeToState(
+      (state) => {
+        void applyState(state);
+      },
+      (err) => {
+        setLiveError(err instanceof Error ? err.message : 'The Turiwa API did not answer.');
+      },
+    );
   }, [hydrated, signedIn, userId]);
 
   const refresh = async () => {
@@ -334,6 +353,26 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const createCircle = async (draft: GroupDraft) => {
     const res = await api.createCircle(draft);
     await applyState(res);
+  };
+
+  const joinCircle = async (code: string) => {
+    await applyState(await api.joinCircle(code));
+  };
+
+  // The API answers with the state after the group and its ledger are gone, so the
+  // screens drop the closed group from the same response that removed it.
+  const deleteCircle = async (circleId: string) => {
+    await applyState(await api.deleteCircle(circleId));
+  };
+
+  // The fine rule and the fines themselves are written by the API, so the screens
+  // show the group's record rather than a local guess that the next poll replaces.
+  const setCircleFine = async (circleId: string, lateFine: number) => {
+    await applyState(await api.setCircleFine(circleId, lateFine));
+  };
+
+  const applyFine = async (circleId: string, memberId: string) => {
+    await applyState(await api.applyFine(circleId, memberId));
   };
 
   const applyForLoan = async (amount: number, purpose: string, circleId?: string) => {
@@ -428,9 +467,10 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const nextStopAfterAuth = async () => {
     if (!api.getAuthToken()) return '/(tabs)' as const;
     try {
-      const [me, state] = await Promise.all([api.fetchMe(), api.fetchState()]);
-      const ownsGroup = state.circles.some((circle) => circle.createdBy === me.user.id);
-      return ownsGroup ? ('/(tabs)' as const) : ('/(onboarding)/create-group' as const);
+      const state = await api.fetchState();
+      // A member who joined somebody else's circle has a circle on their record, so they
+      // belong in the app. Only an account with none at all needs the create-or-join step.
+      return state.circles.length > 0 ? ('/(tabs)' as const) : ('/(onboarding)/create-group' as const);
     } catch {
       return '/(tabs)' as const;
     }
@@ -442,12 +482,14 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     const ofKind = (test: (type: api.LedgerType) => boolean) => total(contributions.filter((item) => test(kind(item))));
     const contributed = ofKind((type) => type === 'Contribution');
     const repaid = ofKind((type) => type === 'Repayment');
+    const fines = ofKind((type) => type === 'Fine');
     const outflow = ofKind(api.isOutflow);
     const setAside = ofKind(api.isSetAside);
     const paidOut = ofKind(api.isLentOut);
-    // Money in is what the fund received: what members paid and what borrowers gave
-    // back. Named kinds only, so a kind added later cannot quietly count as cash in.
-    const inflow = contributed + repaid;
+    // Money in is what the fund received: what members paid, what borrowers gave
+    // back and the fines members handed over. Named kinds only, so a kind added
+    // later cannot quietly count as cash in.
+    const inflow = contributed + repaid + fines;
     // The fund's cash, read as the sum of the ledger. Nothing else is subtracted:
     // what borrowers still owe (`outstanding`) is a claim on the future, not money in
     // the tin now, and the cash a loan handed over is already a row.
@@ -520,6 +562,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     return {
       contributed,
       repaid,
+      fines,
       inflow,
       outflow,
       setAside,
@@ -566,10 +609,15 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       profileName,
       user,
       live,
+      liveError,
       refreshing,
       refresh,
       addContribution,
       createCircle,
+      joinCircle,
+      deleteCircle,
+      setCircleFine,
+      applyFine,
       applyForLoan,
       repayLoan,
       approveLoan,
@@ -594,6 +642,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       profileName,
       user,
       live,
+      liveError,
       hydrated,
       refreshing,
     ],

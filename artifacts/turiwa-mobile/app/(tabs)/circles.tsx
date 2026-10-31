@@ -1,5 +1,6 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { router, type Href } from 'expo-router';
 import React, { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
@@ -19,6 +20,9 @@ export default function CirclesScreen() {
     finance,
     user,
     createCircle,
+    deleteCircle,
+    setCircleFine,
+    applyFine,
     addContribution,
     approveLoan,
     refresh,
@@ -49,6 +53,16 @@ export default function CirclesScreen() {
           <View style={[styles.summaryIcon, { backgroundColor: colors.accent }]}><MaterialCommunityIcons name="hand-heart-outline" size={21} color={colors.onAccent} /></View>
           <View style={{ flex: 1 }}><Text style={[styles.summaryTitle, { color: colors.foreground }]}>Together, you go further</Text><Text style={[styles.summaryCopy, { color: colors.inkSoft }]}>Every contribution builds trust and momentum.</Text></View>
         </View>
+        <Pressable
+          testID="join-circle"
+          accessibilityRole="button"
+          onPress={() => router.push('/join-circle' as Href)}
+          style={({ pressed }) => [styles.joinAction, { borderColor: colors.border, backgroundColor: colors.card, opacity: pressed ? 0.75 : 1 }]}
+        >
+          <Feather name="user-plus" size={16} color={colors.primary} />
+          <Text style={[styles.joinActionText, { color: colors.primary }]}>Join an existing circle with an invite code</Text>
+          <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+        </Pressable>
         <SectionHeading title="Active circles" action="+ New circle" onAction={() => setVisible(true)} />
         {circles.length === 0 ? (
           <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -111,6 +125,19 @@ export default function CirclesScreen() {
           await approveLoan(loanId);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }}
+        canDeleteCircle={circles.length > 1}
+        onDeleteCircle={async (circleId) => {
+          await deleteCircle(circleId);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
+        onSetFine={async (circleId, amount) => {
+          await setCircleFine(circleId, amount);
+          Haptics.selectionAsync();
+        }}
+        onApplyFine={async (circleId, memberId) => {
+          await applyFine(circleId, memberId);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
       />
       <RecordTransactionModal
         visible={contributeVisible}
@@ -128,6 +155,8 @@ const styles = StyleSheet.create({
   summaryIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   summaryTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
   summaryCopy: { fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 5 },
+  joinAction: { minHeight: 48, borderWidth: 1, borderRadius: 14, marginTop: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  joinActionText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   emptyCard: { borderRadius: 18, borderWidth: 1, padding: 20, alignItems: 'center', marginBottom: 12 },
   emptyTitle: { fontFamily: 'Inter_700Bold', fontSize: 16, marginTop: 10 },
   emptyCopy: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18, marginTop: 6, textAlign: 'center' },

@@ -71,11 +71,12 @@ export function AuthField({ label, error, ...props }: TextInputProps & { label: 
   );
 }
 
-export function AuthButton({ label, onPress, outline = false, disabled = false, icon }: { label: string; onPress: () => void; outline?: boolean; disabled?: boolean; icon?: keyof typeof Feather.glyphMap }) {
+export function AuthButton({ label, onPress, outline = false, disabled = false, icon, testID }: { label: string; onPress: () => void; outline?: boolean; disabled?: boolean; icon?: keyof typeof Feather.glyphMap; testID?: string }) {
   const colors = useColors();
   if (outline) {
     return (
       <Pressable
+        testID={testID}
         onPress={onPress}
         disabled={disabled}
         accessibilityRole="button"
@@ -98,6 +99,7 @@ export function AuthButton({ label, onPress, outline = false, disabled = false, 
 
   return (
     <Pressable
+      testID={testID}
       onPress={onPress}
       disabled={disabled}
       accessibilityRole="button"

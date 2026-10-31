@@ -1,23 +1,17 @@
 {
-  "name": "turiwa-api",
-  "main": "./worker.ts",
+  "name": "turiwa-mobile",
+  "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-10-22",
   "compatibility_flags": [
     "nodejs_compat"
   ],
-  "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": [
-      "/api/*"
-    ]
-  },
-  "vars": {
-    "SUPABASE_DB_HOST": "aws-0-eu-west-1.pooler.supabase.com",
-    "SUPABASE_DB_PORT": "6543",
-    "SUPABASE_DB_NAME": "postgres",
-    "SUPABASE_DB_USER": "postgres.adxqhuypkpoekifqjadu",
-    "DATABASE_POOL_MAX": "2"
-  }
+  // Pages serves `node:http` from unenv's stub, so the Express API cannot run here. It runs in
+  // the `turiwa-api` Worker instead and `/api/*` reaches it through this service binding, which
+  // keeps the browser on its own origin and needs no public API hostname.
+  "services": [
+    {
+      "binding": "API",
+      "service": "turiwa-api"
+    }
+  ]
 }
