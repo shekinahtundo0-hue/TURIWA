@@ -32,6 +32,10 @@ export const circlesTable = pgTable("circles", {
   frequency: text("frequency").notNull().default("Monthly"),
   joiningFee: integer("joining_fee").notNull().default(0),
   welfare: integer("welfare").notNull().default(0),
+  // The admin's own rule for a missed contribution. Zero means the group charges
+  // no fine. The app never charges it by itself: the admin applies it to a member
+  // who is behind, and the ledger records it as money received.
+  lateFine: integer("late_fine").notNull().default(0),
   loanInterestPercent: integer("loan_interest_percent").notNull().default(5),
   loanInterestPeriod: text("loan_interest_period").$type<InterestPeriod>().notNull().default("Month"),
   // The member who opened the group is its first admin.

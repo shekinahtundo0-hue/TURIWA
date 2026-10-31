@@ -5,10 +5,11 @@ import { requireAuth, requireAuthForStream, type AuthedRequest } from "../lib/au
 import { newId, newJoinCode } from "../lib/ids";
 import { asInterestPeriod, LOAN_MONTHS, quoteLoan } from "../lib/loanMath";
 import { subscribe } from "../lib/realtime";
-import { FREQUENCIES, circleCash, getState, publishState, RECORDABLE_LEDGER_TYPES, type Frequency, type LedgerType, type RecordableLedgerType } from "../lib/store";
+import { FREQUENCIES, asFrequency, circleCash, getState, publishState, RECORDABLE_LEDGER_TYPES, type Frequency, type LedgerType, type RecordableLedgerType } from "../lib/store";
 import { recordLoanDisbursement, recordLoanRepayment } from "../lib/loanLedger";
 import { formatDay, isoDay, kes } from "../lib/money";
 import { dueAfterMonths } from "../lib/loanMath";
+import { cycleLabel, cycleStart, writtenAt } from "../lib/fines";
 
 const router: IRouter = Router();
 
@@ -159,6 +160,7 @@ router.post("/circles", requireAuth, async (req, res) => {
   const frequency = FREQUENCIES.includes(req.body?.frequency) ? (req.body.frequency as Frequency) : "Monthly";
   const joiningFee = Number(req.body?.joiningFee ?? 0);
   const welfare = Number(req.body?.welfare ?? 0);
+  const lateFine = Number(req.body?.lateFine ?? 0);
   const loanInterestPercent = Number(req.body?.loanInterestPercent ?? 5);
   const loanInterestPeriod = asInterestPeriod(req.body?.loanInterestPeriod);
   if (!name) {
@@ -173,7 +175,7 @@ router.post("/circles", requireAuth, async (req, res) => {
     res.status(400).json({ message: "Set a contribution above zero." });
     return;
   }
-  for (const [label, value] of [["Joining fee", joiningFee], ["Welfare", welfare]] as const) {
+  for (const [label, value] of [["Joining fee", joiningFee], ["Welfare", welfare], ["Late fine", lateFine]] as const) {
     if (!Number.isFinite(value) || value < 0 || value > 1_000_000) {
       res.status(400).json({ message: `${label} must be a number between 0 and 1,000,000.` });
       return;
@@ -208,6 +210,7 @@ router.post("/circles", requireAuth, async (req, res) => {
     frequency,
     joiningFee: Math.round(joiningFee),
     welfare: Math.round(welfare),
+    lateFine: Math.round(lateFine),
     loanInterestPercent: Math.round(loanInterestPercent),
     loanInterestPeriod,
     createdBy: userId,
@@ -272,6 +275,93 @@ router.post("/circles/join", requireAuth, async (req, res) => {
     return;
   }
   res.json(await publishState(userId));
+});
+
+// The admin decides what a missed contribution costs. Saving the rule charges
+// nobody: it only gives the circle a fine the admin can apply by hand.
+router.patch("/circles/:id", requireAuth, async (req, res) => {
+  const userId = userIdOf(req);
+  const circleId = String(req.params.id);
+  const circle = await ownedCircle(userId, circleId);
+  if (!circle) {
+    res.status(404).json({ message: "That group is not on your record." });
+    return;
+  }
+  const lateFine = Number(req.body?.lateFine);
+  if (!Number.isInteger(lateFine) || lateFine < 0 || lateFine > 1_000_000) {
+    res.status(400).json({ message: "The late fine must be a whole amount between 0 and 1,000,000." });
+    return;
+  }
+  await getDb()
+    .update(circlesTable)
+    .set({ lateFine })
+    .where(and(eq(circlesTable.id, circleId), eq(circlesTable.createdBy, userId)));
+  res.json(await publishState(userId));
+});
+
+// One fine per member per cycle, at the amount the admin set. The row is written as
+// money received, because the admin records it when the member pays it — the app does
+// not invent a debt, and it never charges anyone without the admin asking.
+router.post("/circles/:id/fines", requireAuth, async (req, res) => {
+  const userId = userIdOf(req);
+  const circle = await ownedCircle(userId, String(req.params.id));
+  if (!circle) {
+    res.status(404).json({ message: "That group is not on your record." });
+    return;
+  }
+  const memberId = String(req.body?.memberId ?? "");
+  const member = (circle.membersList ?? []).find((entry) => entry.id === memberId && entry.status !== "pending");
+  if (!member) {
+    res.status(404).json({ message: "That member is not on this group's roster." });
+    return;
+  }
+  const lateFine = circle.lateFine ?? 0;
+  if (lateFine <= 0) {
+    res.status(409).json({ message: "Set a late fine for this group before charging one." });
+    return;
+  }
+  const frequency = asFrequency(circle.frequency);
+  const cycle = cycleLabel(frequency);
+
+  const db = getDb();
+  const rows = await db.select().from(contributionsTable).where(eq(contributionsTable.circleId, circle.id));
+  let firstRecord: Date | null = null;
+  for (const row of rows) {
+    const at = writtenAt(row.createdAt);
+    if (at && (!firstRecord || at < firstRecord)) firstRecord = at;
+  }
+  const start = cycleStart(frequency, firstRecord);
+  const named = member.name.trim().toLowerCase();
+  const aboutMember = (row: { member: string | null; userId: string | null }) =>
+    (row.member ?? "").trim().toLowerCase() === named || row.userId === member.id;
+  const thisCycle = rows.filter((row) => {
+    const at = writtenAt(row.createdAt);
+    return at !== null && at >= start && aboutMember(row);
+  });
+  if (thisCycle.some((row) => row.type === "Fine")) {
+    res.status(409).json({ message: `${member.name} has already been fined for ${cycle}.` });
+    return;
+  }
+  const paid = thisCycle
+    .filter((row) => row.type === "Contribution" && row.status === "Complete")
+    .reduce((sum, row) => sum + row.amount, 0);
+  if (paid >= circle.contribution) {
+    res.status(409).json({ message: `${member.name} has paid the ${kes(circle.contribution)} contribution for ${cycle}.` });
+    return;
+  }
+
+  await db.insert(contributionsTable).values({
+    id: newId("c"),
+    circleId: circle.id,
+    userId: member.id,
+    amount: lateFine,
+    date: formatDay(new Date()),
+    note: `Late contribution fine — ${cycle}`,
+    status: "Complete",
+    type: "Fine",
+    member: member.name,
+  });
+  res.status(201).json(await publishState(userId));
 });
 
 // Closing a group removes its ledger with it, so a member is never left holding a

@@ -27,6 +27,7 @@ export function GroupForm({
   const [frequency, setFrequency] = useState<Frequency>('Monthly');
   const [joiningFee, setJoiningFee] = useState('1000');
   const [welfare, setWelfare] = useState('500');
+  const [lateFine, setLateFine] = useState('0');
   const [loanInterest, setLoanInterest] = useState('10');
   const [loanInterestPeriod, setLoanInterestPeriod] = useState<InterestPeriod>('Month');
   const [errors, setErrors] = useState<{ name?: string; contribution?: string; loanInterest?: string }>({});
@@ -66,6 +67,7 @@ export function GroupForm({
       frequency,
       joiningFee: Number(joiningFee) || 0,
       welfare: Number(welfare) || 0,
+      lateFine: Number(lateFine) || 0,
       loanInterestPercent: interest,
       loanInterestPeriod,
     };
@@ -192,6 +194,24 @@ export function GroupForm({
       <Text style={[styles.rowHint, { color: colors.mutedForeground }]}>
         The joining fee and welfare cover are written on the group's record so everyone reads the same agreement.
         Turiwa does not collect either one — the treasurer logs the payment in the ledger when it arrives.
+      </Text>
+
+      <Text style={[styles.label, { color: colors.inkSoft }]}>LATE FINE (KSH)</Text>
+      <View style={[styles.input, styles.inputAmount, { backgroundColor: colors.input, borderColor: colors.border }]}>
+        <TextInput
+          testID="group-late-fine"
+          value={lateFine}
+          onChangeText={(value) => setLateFine(digits(value))}
+          keyboardType="number-pad"
+          accessibilityLabel="Late contribution fine in shillings"
+          placeholder="0"
+          placeholderTextColor={colors.mutedForeground}
+          style={[styles.plainInput, { color: colors.foreground }]}
+        />
+      </View>
+      <Text style={[styles.rowHint, { color: colors.mutedForeground }]}>
+        What the admin charges a member who misses a contribution cycle. You can change it later on the group;
+        Turiwa records the fine in the ledger and never charges anyone automatically.
       </Text>
 
       <Text style={[styles.label, { color: colors.inkSoft }]}>LOAN INTEREST %</Text>

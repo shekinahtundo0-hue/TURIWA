@@ -30,6 +30,8 @@ export type Statement = {
   opening: number;
   contributions: number;
   repaid: number;
+  /** Money members handed over as late-contribution fines. */
+  fines: number;
   expenses: number;
   welfare: number;
   paidOut: number;
@@ -50,10 +52,11 @@ export function buildStatement(items: Contribution[], period: Period): Statement
     rows.reduce((total, item) => total + (test(item) ? item.amount : 0), 0);
   const contributions = sum((item) => item.type === 'Contribution');
   const repaid = sum((item) => item.type === 'Repayment');
+  const fines = sum((item) => item.type === 'Fine');
   const expenses = sum((item) => isOutflow(item.type));
   const welfare = sum((item) => isSetAside(item.type));
   const paidOut = sum((item) => isLentOut(item.type));
-  const moneyIn = contributions + repaid;
+  const moneyIn = contributions + repaid + fines;
   const moneyOut = expenses + welfare + paidOut;
   const opening = period === ALL_PERIODS
     ? 0
@@ -65,6 +68,7 @@ export function buildStatement(items: Contribution[], period: Period): Statement
     opening,
     contributions,
     repaid,
+    fines,
     expenses,
     welfare,
     paidOut,
@@ -176,6 +180,7 @@ export function statementCsv(statement: Statement, groupName: string): string {
     ['Opening balance (KES)', statement.opening],
     ['Contributions (KES)', statement.contributions],
     ['Loan repayments received (KES)', statement.repaid],
+    ['Late fines received (KES)', statement.fines],
     ['Expenses (KES)', statement.expenses],
     ['Welfare set aside (KES)', statement.welfare],
     ['Loan money paid out (KES)', statement.paidOut],

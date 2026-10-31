@@ -5,7 +5,7 @@ import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, Share,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useResponsive } from '@/hooks/useResponsive';
-import { entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type Circle, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
+import { cycleNoun, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type Circle, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
 
 // "3 two-week cycles", "1 month", "5 weeks" - the pace copy has to read well for
 // every frequency the group sets.
@@ -311,6 +311,9 @@ const LEDGER_HINT: Record<LedgerType, string> = {
   Expense: 'Money the group spent.',
   Repayment: 'Money coming back from a loan.',
   Welfare: 'Money the group sets aside and still holds.',
+  // Not in the form: the fine section on a circle writes this row, naming the member
+  // and the cycle, so a hand-typed one could charge somebody the admin never chose.
+  Fine: 'A late contribution fine the admin recorded for a member.',
   // Not in the form: the API writes this row itself when a loan's money moves, so a
   // hand-typed one could report a payout no loan owes the fund for.
   LoanDisbursement: 'Cash the group handed over as a loan. The loan writes this row itself.',
@@ -323,6 +326,7 @@ const LEDGER_LABEL: Record<LedgerType, string> = {
   Expense: 'Expense',
   Repayment: 'Repayment',
   Welfare: 'Welfare',
+  Fine: 'Late fine',
   LoanDisbursement: 'Loan paid out',
 };
 
@@ -336,6 +340,9 @@ function ledgerTone(colors: ReturnType<typeof useColors>, type: LedgerType) {
   if (isLentOut(type)) return { tint: colors.balance, surface: colors.balanceSoft, icon: 'bank-transfer-out' as const, sign: '−' };
   if (isOutflow(type)) return { tint: colors.expense, surface: colors.expenseSoft, icon: 'arrow-top-right' as const, sign: '−' };
   if (isSetAside(type)) return { tint: colors.balance, surface: colors.balanceSoft, icon: 'bookmark-outline' as const, sign: '' };
+  // A fine is money in like a contribution, but the gavel tells the row apart at a
+  // glance from the payments a member chose to make.
+  if (type === 'Fine') return { tint: colors.income, surface: colors.incomeSoft, icon: 'gavel' as const, sign: '+' };
   return { tint: colors.income, surface: colors.incomeSoft, icon: 'arrow-bottom-left' as const, sign: '+' };
 }
 
@@ -569,6 +576,8 @@ export function CircleDetailModal({
   onAddMember,
   canDeleteCircle = false,
   onDeleteCircle,
+  onSetFine,
+  onApplyFine,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -586,6 +595,10 @@ export function CircleDetailModal({
    *  delete the only one, so the control says that instead of offering it. */
   canDeleteCircle?: boolean;
   onDeleteCircle?: (circleId: string) => Promise<void>;
+  /** Saves the admin's fine rule. It charges nobody; it only sets what a fine costs. */
+  onSetFine?: (circleId: string, amount: number) => Promise<void>;
+  /** Records one fine against a member who has not paid the current cycle. */
+  onApplyFine?: (circleId: string, memberId: string) => Promise<void>;
 }) {
   const colors = useColors();
   const sheet = useSheet();
@@ -599,6 +612,12 @@ export function CircleDetailModal({
   const [deleteVisible, setDeleteVisible] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const [fineEditing, setFineEditing] = React.useState(false);
+  const [fineAmount, setFineAmount] = React.useState('');
+  const [savingFine, setSavingFine] = React.useState(false);
+  const [finingMember, setFiningMember] = React.useState<string | null>(null);
+  const [fineFeedback, setFineFeedback] = React.useState<{ message: string; failed: boolean } | null>(null);
+  const [fineError, setFineError] = React.useState<string | null>(null);
 
   if (!circle) return null;
   const tint = circle.color === 'gold' ? colors.accent : circle.color === 'blue' ? colors.tint : colors.primary;
@@ -623,6 +642,11 @@ export function CircleDetailModal({
   // Only this group's requests: an admin decides on the loans taken through their
   // own group, not on every pending loan on the account.
   const pendingLoans = loans.filter((l) => l.status === 'Pending' && l.circleId === circle.id);
+
+  // Who the ledger says is behind on the cycle running now. The admin still decides
+  // whether that costs them a fine; this is only the list of shortfalls.
+  const lateMembers = membersList.filter((member) => member.status === 'active' && member.lateThisPeriod);
+  const cycle = cycleNoun(circle.frequency);
 
   const handleApproveLoan = async (loanId: string) => {
     if (!onApproveLoan || approvingLoanId) return;
@@ -686,6 +710,50 @@ export function CircleDetailModal({
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : 'Could not delete this circle. Try again.');
       setDeleting(false);
+    }
+  };
+
+  const handleSaveFine = async () => {
+    if (!onSetFine || savingFine) return;
+    const value = Number(fineAmount);
+    if (!Number.isInteger(value) || value < 0 || value > 1_000_000) {
+      setFineError('Enter a whole shilling amount between 0 and 1,000,000.');
+      return;
+    }
+    setSavingFine(true);
+    setFineError(null);
+    setFineFeedback(null);
+    try {
+      await onSetFine(circle.id, value);
+      setFineEditing(false);
+      setFineFeedback({
+        message: value > 0 ? `Late fine set at KES ${value.toLocaleString()}.` : 'Late fines are off for this circle.',
+        failed: false,
+      });
+    } catch (error) {
+      setFineError(error instanceof Error ? error.message : 'Could not save the fine. Try again.');
+    } finally {
+      setSavingFine(false);
+    }
+  };
+
+  const handleFine = async (memberId: string, memberName: string) => {
+    if (!onApplyFine || finingMember) return;
+    setFiningMember(memberId);
+    setFineFeedback(null);
+    try {
+      await onApplyFine(circle.id, memberId);
+      setFineFeedback({
+        message: `Recorded a KES ${circle.lateFine.toLocaleString()} late fine for ${memberName}.`,
+        failed: false,
+      });
+    } catch (error) {
+      setFineFeedback({
+        message: error instanceof Error ? error.message : 'Could not record that fine. Try again.',
+        failed: true,
+      });
+    } finally {
+      setFiningMember(null);
     }
   };
 
@@ -1013,6 +1081,144 @@ export function CircleDetailModal({
               </View>
             </View>
 
+            {/* Late fines. The amount is the admin's rule; the app only names who is
+                behind this cycle and records the fine the admin applies by hand. */}
+            <View style={[styles.fineCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
+              <View style={styles.fineHead}>
+                <View style={styles.fineHeadMain}>
+                  <MaterialCommunityIcons name="gavel" size={17} color={colors.accentForeground} />
+                  <Text style={[styles.fineTitle, { color: colors.foreground }]}>LATE CONTRIBUTION FINE</Text>
+                </View>
+                {isCircleAdmin && onSetFine ? (
+                  <Pressable
+                    testID="fine-edit"
+                    accessibilityRole="button"
+                    accessibilityLabel={circle.lateFine > 0 ? 'Change the late fine' : 'Set a late fine'}
+                    onPress={() => {
+                      setFineError(null);
+                      setFineAmount(circle.lateFine > 0 ? String(circle.lateFine) : '');
+                      setFineEditing((open) => !open);
+                    }}
+                    style={({ pressed }) => [styles.fineEditBtn, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}
+                  >
+                    <Text style={[styles.fineEditText, { color: colors.primary }]}>
+                      {fineEditing ? 'Cancel' : circle.lateFine > 0 ? 'Change' : 'Set fine'}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              <Text testID="fine-rule" style={[styles.fineRule, { color: colors.inkSoft }]}>
+                {circle.lateFine > 0
+                  ? `KES ${circle.lateFine.toLocaleString()} when a member misses a ${cycle} contribution. The admin decides who is charged.`
+                  : 'No fine is set. The admin decides whether a missed contribution costs anything.'}
+              </Text>
+
+              {fineEditing && onSetFine ? (
+                <View style={styles.fineEditor}>
+                  <View style={[styles.fineInputWrap, { backgroundColor: colors.input, borderColor: fineError ? colors.destructive : colors.border }]}>
+                    <Text style={[styles.fineCurrency, { color: colors.primary }]}>KES</Text>
+                    <TextInput
+                      testID="fine-amount"
+                      value={fineAmount}
+                      onChangeText={(value) => setFineAmount(value.replace(/\D/g, '').slice(0, 7))}
+                      keyboardType="number-pad"
+                      accessibilityLabel="Late fine in shillings"
+                      placeholder="0"
+                      placeholderTextColor={colors.mutedForeground}
+                      style={[styles.fineInput, { color: colors.foreground }]}
+                    />
+                  </View>
+                  <Text style={[styles.fineHint, { color: colors.mutedForeground }]}>
+                    A whole amount in shillings; zero turns fines off. Saving the rule charges nobody.
+                  </Text>
+                  {fineError ? (
+                    <Text testID="fine-error" style={[styles.fineHint, { color: colors.destructive }]}>{fineError}</Text>
+                  ) : null}
+                  <Pressable
+                    testID="fine-save"
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: savingFine }}
+                    disabled={savingFine}
+                    onPress={handleSaveFine}
+                    style={({ pressed }) => [
+                      styles.fineSave,
+                      { backgroundColor: colors.primary, opacity: savingFine ? 0.6 : pressed ? 0.85 : 1 },
+                    ]}
+                  >
+                    <Text style={[styles.fineSaveText, { color: colors.primaryForeground }]}>
+                      {savingFine ? 'Saving…' : 'Save fine'}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {isCircleAdmin && circle.lateFine > 0 ? (
+                <>
+                  <Text style={[styles.fineSubhead, { color: colors.mutedForeground }]}>
+                    {`BEHIND THIS ${cycle.toUpperCase()} (${lateMembers.length})`}
+                  </Text>
+                  {lateMembers.length === 0 ? (
+                    <Text testID="fine-none" style={[styles.fineHint, { color: colors.mutedForeground }]}>
+                      Every active member has paid this {cycle}’s contribution.
+                    </Text>
+                  ) : (
+                    lateMembers.map((member) => (
+                      <View key={member.id} style={[styles.fineRow, { borderTopColor: colors.border }]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.fineMember, { color: colors.foreground }]} numberOfLines={1}>
+                            {member.name}
+                          </Text>
+                          <Text testID={`fine-meta-${member.id}`} style={[styles.fineMemberMeta, { color: colors.mutedForeground }]}>
+                            Paid KES {(member.paidThisPeriod ?? 0).toLocaleString()} of KES {circle.contribution.toLocaleString()} this {cycle}
+                          </Text>
+                        </View>
+                        {member.finedThisPeriod ? (
+                          <View testID={`fine-done-${member.id}`} style={[styles.fineDonePill, { backgroundColor: colors.warmSurface, borderColor: colors.goldBorder }]}>
+                            <Text style={[styles.fineDoneText, { color: colors.accentForeground }]}>Fined</Text>
+                          </View>
+                        ) : (
+                          <Pressable
+                            testID={`fine-member-${member.id}`}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Fine ${member.name} KES ${circle.lateFine}`}
+                            accessibilityState={{ disabled: finingMember !== null }}
+                            disabled={finingMember !== null}
+                            onPress={() => handleFine(member.id, member.name)}
+                            style={({ pressed }) => [
+                              styles.fineButton,
+                              {
+                                borderColor: colors.destructiveBorder,
+                                backgroundColor: colors.destructiveSoft,
+                                opacity: finingMember === member.id ? 0.6 : pressed ? 0.8 : 1,
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.fineButtonText, { color: colors.destructive }]}>
+                              {finingMember === member.id ? 'Fining…' : `Fine KES ${circle.lateFine.toLocaleString()}`}
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    ))
+                  )}
+                </>
+              ) : null}
+
+              {fineFeedback ? (
+                <Text
+                  testID="fine-feedback"
+                  accessibilityLiveRegion="polite"
+                  style={[styles.fineHint, { color: fineFeedback.failed ? colors.destructive : colors.success, marginTop: 8 }]}
+                >
+                  {fineFeedback.message}
+                </Text>
+              ) : (
+                <Text style={[styles.fineHint, { color: colors.mutedForeground }]}>
+                  A fine is recorded in the ledger as money received. Turiwa never charges anyone on its own.
+                </Text>
+              )}
+            </View>
+
             {/* Invite Members */}
             <Text style={[styles.inputLabel, { color: colors.inkSoft, marginTop: 24 }]}>Invite members</Text>
             <Pressable
@@ -1222,6 +1428,16 @@ export function notificationItems(contributions: Contribution[], loans: Loan[], 
   for (const item of contributions.slice(0, 4)) {
     const circle = circles.find((entry) => entry.id === item.circleId);
     const kind = item.type ?? 'Contribution';
+    if (kind === 'Fine') {
+      list.push({
+        id: `contribution-${item.id}`,
+        icon: 'alert-circle',
+        title: 'Late fine recorded',
+        copy: `KES ${item.amount.toLocaleString()} collected from ${item.member ?? 'a member'} in ${circle?.name ?? 'your circle'}.`,
+        date: item.date,
+      });
+      continue;
+    }
     const verb = isOutflow(kind) ? 'paid out of' : isSetAside(kind) ? 'set aside from' : 'saved to';
     const icon = isOutflow(kind) ? 'trending-down' : isSetAside(kind) ? 'bookmark' : 'trending-up';
     list.push({ id: `contribution-${item.id}`, icon, title: `${kind} recorded`, copy: `KES ${item.amount.toLocaleString()} ${verb} ${circle?.name ?? 'your circle'}${item.member ? ` · ${item.member}` : ''}${item.status === 'Pending' ? ' · pending confirmation' : ''}.`, date: item.date });
@@ -1382,6 +1598,29 @@ export const styles = StyleSheet.create({
   dangerCopy: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 3, lineHeight: 16 },
   deleteConfirmButton: { flex: 1, minHeight: 49, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   deleteConfirmText: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
+  // Late-fine rule and the members behind on the cycle
+  fineCard: { borderWidth: 1, borderRadius: 16, padding: 14, marginTop: 16, gap: 8 },
+  fineHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  fineHeadMain: { flexDirection: 'row', alignItems: 'center', gap: 7, flex: 1 },
+  fineTitle: { fontFamily: 'Inter_700Bold', fontSize: 10.5, letterSpacing: 1.2 },
+  fineEditBtn: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 },
+  fineEditText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+  fineRule: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 },
+  fineEditor: { gap: 8, marginTop: 2 },
+  fineInputWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, height: 48, gap: 10 },
+  fineCurrency: { fontFamily: 'Inter_700Bold', fontSize: 12 },
+  fineInput: { flex: 1, fontFamily: 'Inter_700Bold', fontSize: 18 },
+  fineHint: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16 },
+  fineSave: { minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  fineSaveText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  fineSubhead: { fontFamily: 'Inter_700Bold', fontSize: 9.5, letterSpacing: 1.1, marginTop: 6 },
+  fineRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
+  fineMember: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
+  fineMemberMeta: { fontFamily: 'Inter_400Regular', fontSize: 10.5, marginTop: 2 },
+  fineButton: { borderWidth: 1, borderRadius: 10, minHeight: 38, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  fineButtonText: { fontFamily: 'Inter_700Bold', fontSize: 10.5 },
+  fineDonePill: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
+  fineDoneText: { fontFamily: 'Inter_700Bold', fontSize: 10 },
   // Governance & Members styling
   governanceCard: { borderWidth: 1, borderRadius: 18, padding: 16, marginTop: 16 },
   governanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },

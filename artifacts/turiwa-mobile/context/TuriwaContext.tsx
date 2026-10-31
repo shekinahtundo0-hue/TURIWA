@@ -29,7 +29,9 @@ export type Finance = {
   contributed: number;
   /** What borrowers have paid back. */
   repaid: number;
-  /** Money in: contributions and repayments together. */
+  /** Money members handed over as late-contribution fines. */
+  fines: number;
+  /** Money in: contributions, repayments and fines together. */
   inflow: number;
   /** Money the group spent. */
   outflow: number;
@@ -96,6 +98,8 @@ type TuriwaContextValue = {
   createCircle: (draft: GroupDraft) => Promise<void>;
   joinCircle: (code: string) => Promise<void>;
   deleteCircle: (circleId: string) => Promise<void>;
+  setCircleFine: (circleId: string, lateFine: number) => Promise<void>;
+  applyFine: (circleId: string, memberId: string) => Promise<void>;
   applyForLoan: (amount: number, purpose: string, circleId?: string) => Promise<void>;
   repayLoan: (amount: number, loanId?: string) => Promise<void>;
   approveLoan: (loanId: string) => Promise<void>;
@@ -161,6 +165,9 @@ function normalizeCircle(raw: Partial<Circle> & { monthly?: number }, user: Auth
     frequency: raw.frequency ?? 'Monthly',
     joiningFee: raw.joiningFee ?? 0,
     welfare: raw.welfare ?? 0,
+    // A group opened before fines existed charges none, which is what zero means.
+    lateFine: raw.lateFine ?? 0,
+    cycleStart: raw.cycleStart,
     loanInterestPercent: raw.loanInterestPercent ?? 5,
     loanInterestPeriod: raw.loanInterestPeriod ?? 'Month',
     createdBy: raw.createdBy ?? null,
@@ -358,6 +365,16 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await applyState(await api.deleteCircle(circleId));
   };
 
+  // The fine rule and the fines themselves are written by the API, so the screens
+  // show the group's record rather than a local guess that the next poll replaces.
+  const setCircleFine = async (circleId: string, lateFine: number) => {
+    await applyState(await api.setCircleFine(circleId, lateFine));
+  };
+
+  const applyFine = async (circleId: string, memberId: string) => {
+    await applyState(await api.applyFine(circleId, memberId));
+  };
+
   const applyForLoan = async (amount: number, purpose: string, circleId?: string) => {
     await applyState(await api.applyForLoan(amount, purpose, circleId));
   };
@@ -464,12 +481,14 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     const ofKind = (test: (type: api.LedgerType) => boolean) => total(contributions.filter((item) => test(kind(item))));
     const contributed = ofKind((type) => type === 'Contribution');
     const repaid = ofKind((type) => type === 'Repayment');
+    const fines = ofKind((type) => type === 'Fine');
     const outflow = ofKind(api.isOutflow);
     const setAside = ofKind(api.isSetAside);
     const paidOut = ofKind(api.isLentOut);
-    // Money in is what the fund received: what members paid and what borrowers gave
-    // back. Named kinds only, so a kind added later cannot quietly count as cash in.
-    const inflow = contributed + repaid;
+    // Money in is what the fund received: what members paid, what borrowers gave
+    // back and the fines members handed over. Named kinds only, so a kind added
+    // later cannot quietly count as cash in.
+    const inflow = contributed + repaid + fines;
     // The fund's cash, read as the sum of the ledger. Nothing else is subtracted:
     // what borrowers still owe (`outstanding`) is a claim on the future, not money in
     // the tin now, and the cash a loan handed over is already a row.
@@ -542,6 +561,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     return {
       contributed,
       repaid,
+      fines,
       inflow,
       outflow,
       setAside,
@@ -595,6 +615,8 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       createCircle,
       joinCircle,
       deleteCircle,
+      setCircleFine,
+      applyFine,
       applyForLoan,
       repayLoan,
       approveLoan,

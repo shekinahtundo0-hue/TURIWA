@@ -21,6 +21,7 @@ create table if not exists public.circles (
   members integer not null,
   target integer not null,
   monthly integer not null,
+  late_fine integer not null default 0,
   color text not null
 );
 

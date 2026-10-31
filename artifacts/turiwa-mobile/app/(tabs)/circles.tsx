@@ -21,6 +21,8 @@ export default function CirclesScreen() {
     user,
     createCircle,
     deleteCircle,
+    setCircleFine,
+    applyFine,
     addContribution,
     approveLoan,
     refresh,
@@ -126,6 +128,14 @@ export default function CirclesScreen() {
         canDeleteCircle={circles.length > 1}
         onDeleteCircle={async (circleId) => {
           await deleteCircle(circleId);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
+        onSetFine={async (circleId, amount) => {
+          await setCircleFine(circleId, amount);
+          Haptics.selectionAsync();
+        }}
+        onApplyFine={async (circleId, memberId) => {
+          await applyFine(circleId, memberId);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }}
       />

@@ -66,6 +66,7 @@ export async function ensureSchema(db: AppDb): Promise<void> {
       frequency TEXT NOT NULL DEFAULT 'Monthly',
       joining_fee INTEGER NOT NULL DEFAULT 0,
       welfare INTEGER NOT NULL DEFAULT 0,
+      late_fine INTEGER NOT NULL DEFAULT 0,
       loan_interest_percent INTEGER NOT NULL DEFAULT 5,
       loan_interest_period TEXT NOT NULL DEFAULT 'Month',
       created_by TEXT,
@@ -100,6 +101,8 @@ export async function ensureSchema(db: AppDb): Promise<void> {
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS frequency TEXT NOT NULL DEFAULT 'Monthly'`);
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS joining_fee INTEGER NOT NULL DEFAULT 0`);
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS welfare INTEGER NOT NULL DEFAULT 0`);
+  // Groups created before fines existed charge none until their admin sets one.
+  await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS late_fine INTEGER NOT NULL DEFAULT 0`);
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS loan_interest_percent INTEGER NOT NULL DEFAULT 5`);
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS loan_interest_period TEXT NOT NULL DEFAULT 'Month'`);
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS created_by TEXT`);

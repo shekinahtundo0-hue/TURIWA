@@ -27,6 +27,11 @@ export const FREQUENCIES: { value: Frequency; short: string; periodsPerYear: num
 export const frequencyNoun = (value: Frequency) =>
   value === 'Weekly' ? 'week' : value === 'Bi-weekly' ? 'two weeks' : 'month';
 
+// The cycle a contribution falls due in, as the app says it when naming the cycle
+// that is running: "this week", "this fortnight", "this month".
+export const cycleNoun = (value: Frequency) =>
+  value === 'Weekly' ? 'week' : value === 'Bi-weekly' ? 'fortnight' : 'month';
+
 export const periodsPerYear = (value: Frequency) =>
   FREQUENCIES.find((item) => item.value === value)?.periodsPerYear ?? 12;
 
@@ -43,6 +48,7 @@ export type GroupDraft = {
   frequency: Frequency;
   joiningFee: number;
   welfare: number;
+  lateFine: number;
   loanInterestPercent: number;
   loanInterestPeriod: InterestPeriod;
 };
@@ -79,12 +85,15 @@ export type CircleRole = 'admin' | 'co-admin' | 'member';
 
 // The kinds of ledger entry the group keeps. Contributions and repayments bring
 // cash in, an expense is a deduction, welfare is set aside — still held by the
-// group but earmarked — and a loan disbursement is cash the fund handed to a
-// member and expects back as repayments.
-export const LEDGER_TYPES = ['Contribution', 'Expense', 'Repayment', 'Welfare', 'LoanDisbursement'] as const;
+// group but earmarked — a fine is money a member handed over for missing a
+// contribution, and a loan disbursement is cash the fund handed to a member and
+// expects back as repayments.
+export const LEDGER_TYPES = ['Contribution', 'Expense', 'Repayment', 'Welfare', 'Fine', 'LoanDisbursement'] as const;
 export type LedgerType = (typeof LEDGER_TYPES)[number];
-// A loan disbursement is written by the loan it belongs to, never typed in by hand.
-export const RECORDABLE_LEDGER_TYPES = LEDGER_TYPES.filter((type) => type !== 'LoanDisbursement');
+// A loan disbursement is written by the loan it belongs to and a fine by the admin
+// action on a circle, never typed in by hand: a typed fine would name no member and
+// no cycle, and a typed payout no loan backs.
+export const RECORDABLE_LEDGER_TYPES = LEDGER_TYPES.filter((type) => type !== 'LoanDisbursement' && type !== 'Fine');
 export const isOutflow = (type: LedgerType) => type === 'Expense';
 export const isSetAside = (type: LedgerType) => type === 'Welfare';
 /** Money the fund handed over for a loan and is waiting to receive back. */
@@ -119,6 +128,12 @@ export type CircleMember = {
   status: 'pending' | 'active';
   joinedDate: string;
   totalContributed: number;
+  /** What this member has paid towards the contribution cycle running now. */
+  paidThisPeriod?: number;
+  /** Active, has the group's contribution due, and has not reached it this cycle. */
+  lateThisPeriod?: boolean;
+  /** The admin already recorded this cycle's fine for them. */
+  finedThisPeriod?: boolean;
 };
 
 export type Circle = {
@@ -133,6 +148,10 @@ export type Circle = {
   frequency: Frequency;
   joiningFee: number;
   welfare: number;
+  /** What the admin charges for a missed contribution; zero means no fine. */
+  lateFine: number;
+  /** The first day of the contribution cycle running now, as `2026-10-26`. */
+  cycleStart?: string;
   loanInterestPercent: number;
   loanInterestPeriod: InterestPeriod;
   createdBy: string | null;
@@ -379,6 +398,24 @@ export function joinCircle(code: string) {
 export function deleteCircle(circleId: string) {
   return request<AppState>(`/circles/${encodeURIComponent(circleId)}`, {
     method: 'DELETE',
+  });
+}
+
+// The admin's fine rule is part of the group's record, so it travels with the state
+// the screens already read rather than living only on the phone that set it.
+export function setCircleFine(circleId: string, lateFine: number) {
+  return request<AppState>(`/circles/${encodeURIComponent(circleId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ lateFine }),
+  });
+}
+
+// Recording a fine writes one ledger row for the member and cycle the API checked,
+// so the same member cannot be fined twice for one missed contribution.
+export function applyFine(circleId: string, memberId: string) {
+  return request<AppState>(`/circles/${encodeURIComponent(circleId)}/fines`, {
+    method: 'POST',
+    body: JSON.stringify({ memberId }),
   });
 }
 
