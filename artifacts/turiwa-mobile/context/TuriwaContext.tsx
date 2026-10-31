@@ -467,9 +467,10 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const nextStopAfterAuth = async () => {
     if (!api.getAuthToken()) return '/(tabs)' as const;
     try {
-      const [me, state] = await Promise.all([api.fetchMe(), api.fetchState()]);
-      const ownsGroup = state.circles.some((circle) => circle.createdBy === me.user.id);
-      return ownsGroup ? ('/(tabs)' as const) : ('/(onboarding)/create-group' as const);
+      const state = await api.fetchState();
+      // A member who joined somebody else's circle has a circle on their record, so they
+      // belong in the app. Only an account with none at all needs the create-or-join step.
+      return state.circles.length > 0 ? ('/(tabs)' as const) : ('/(onboarding)/create-group' as const);
     } catch {
       return '/(tabs)' as const;
     }

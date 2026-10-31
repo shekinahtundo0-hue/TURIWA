@@ -1,12 +1,10 @@
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { View } from 'react-native';
 import { AuthButton, AuthField, AuthHeader, AuthShell } from '@/components/AuthUI';
 import { useTuriwa } from '@/context/TuriwaContext';
-import { useColors } from '@/hooks/useColors';
 
 export default function JoinCircleScreen() {
-  const colors = useColors();
   const { joinCircle } = useTuriwa();
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
@@ -38,6 +36,7 @@ export default function JoinCircleScreen() {
         onBack={() => router.back()}
       />
       <AuthField
+        testID="join-code"
         label="Circle invite code"
         value={code}
         onChangeText={(value) => {
@@ -50,15 +49,22 @@ export default function JoinCircleScreen() {
         maxLength={16}
         error={error}
       />
-      <AuthButton label={busy ? 'Joining…' : 'Join circle'} onPress={submit} disabled={busy} icon="users" />
-      <Pressable onPress={() => router.replace('/(onboarding)/create-group')} style={styles.secondary}>
-        <Text style={[styles.secondaryText, { color: colors.mutedForeground }]}>Or create a new circle</Text>
-      </Pressable>
+      <AuthButton
+        testID="join-submit"
+        label={busy ? 'Joining…' : 'Join circle'}
+        onPress={submit}
+        disabled={busy}
+        icon="users"
+      />
+      <View style={{ marginTop: 12 }}>
+        <AuthButton
+          testID="onboarding-create"
+          label="Or start a new circle instead"
+          icon="plus"
+          outline
+          onPress={() => router.replace('/(onboarding)/create-group')}
+        />
+      </View>
     </AuthShell>
   );
 }
-
-const styles = StyleSheet.create({
-  secondary: { alignSelf: 'center', marginTop: 22, padding: 8 },
-  secondaryText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-});
