@@ -54,7 +54,15 @@ export function useGoogleNativeAuth(onIdToken: (idToken: string) => Promise<void
     delivered.current = false;
     setError('');
     setBusy(true);
-    const result = await promptAsync();
+    let result;
+    try {
+      result = await promptAsync();
+    } catch (err) {
+      // A prompt that cannot even open would otherwise leave the button spinning for good.
+      setBusy(false);
+      setError(err instanceof Error ? err.message : 'Google could not open its sign-in window.');
+      return;
+    }
     // A successful prompt still has the code exchange ahead of it, so only the effect
     // gets to clear the spinner once a token has actually landed.
     if (result.type === 'success') return;

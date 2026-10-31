@@ -567,6 +567,8 @@ export function CircleDetailModal({
   onAssignCoAdmin,
   onRemoveCoAdmin,
   onAddMember,
+  canDeleteCircle = false,
+  onDeleteCircle,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -580,6 +582,10 @@ export function CircleDetailModal({
   onAssignCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onRemoveCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onAddMember?: (circleId: string, name: string, phone?: string) => Promise<{ success: boolean; message: string }>;
+  /** Whether this account owns another circle to fall back on. The API refuses to
+   *  delete the only one, so the control says that instead of offering it. */
+  canDeleteCircle?: boolean;
+  onDeleteCircle?: (circleId: string) => Promise<void>;
 }) {
   const colors = useColors();
   const sheet = useSheet();
@@ -590,6 +596,9 @@ export function CircleDetailModal({
   const [memberActionFeedback, setMemberActionFeedback] = React.useState<string | null>(null);
   const [approvalFeedback, setApprovalFeedback] = React.useState<{ message: string; failed: boolean } | null>(null);
   const [approvingLoanId, setApprovingLoanId] = React.useState<string | null>(null);
+  const [deleteVisible, setDeleteVisible] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   if (!circle) return null;
   const tint = circle.color === 'gold' ? colors.accent : circle.color === 'blue' ? colors.tint : colors.primary;
@@ -633,8 +642,8 @@ export function CircleDetailModal({
   };
 
   const shareInvite = async () => {
-    const message = `Turiwa group “${circle.name}” · KES ${circle.contribution.toLocaleString()} every ${frequencyNoun(circle.frequency)} · target KES ${circle.target.toLocaleString()}`;
-    setInvite({ message, result: 'Group details ready to share.' });
+    const message = `Join my Turiwa circle “${circle.name}”\nInvite code: ${circle.joinCode}\nContribution: KES ${circle.contribution.toLocaleString()} every ${frequencyNoun(circle.frequency)}\nTarget: KES ${circle.target.toLocaleString()}\nOpen Turiwa, choose Join a circle, and enter this code.`;
+    setInvite({ message, result: 'Invite code ready to share.' });
     try {
       await Share.share({ message, title: `Turiwa group ${circle.name}` });
     } catch {
@@ -664,6 +673,20 @@ export function CircleDetailModal({
     setNewMemberPhone('');
     setAddMemberVisible(false);
     setTimeout(() => setMemberActionFeedback(null), 3000);
+  };
+
+  const handleDeleteCircle = async () => {
+    if (!onDeleteCircle || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDeleteCircle(circle.id);
+      setDeleteVisible(false);
+      onClose();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete this circle. Try again.');
+      setDeleting(false);
+    }
   };
 
   return (
@@ -1004,7 +1027,7 @@ export function CircleDetailModal({
               <View style={{ flex: 1 }}>
                 <Text style={[styles.inviteTitle, { color: colors.foreground }]}>Share this group</Text>
                 <Text style={[styles.inviteCopy, { color: colors.mutedForeground }]}>
-                  {invite ? invite.result : 'Send the group name, amount and target to a friend.'}
+                  {invite ? invite.result : `Share invite code ${circle.joinCode} with a friend.`}
                 </Text>
               </View>
             </Pressable>
@@ -1033,6 +1056,42 @@ export function CircleDetailModal({
                 No contributions recorded in this circle yet. Be the first to give it momentum.
               </Text>
             )}
+
+            {/* Closing the group. Only an admin closes one, and only while another
+                group remains: an account with no circle would have nowhere to land. */}
+            {isCircleAdmin && onDeleteCircle ? (
+              <Pressable
+                testID="delete-circle"
+                accessibilityRole="button"
+                accessibilityLabel={canDeleteCircle ? `Delete ${circle.name}` : 'Deleting the last circle is not allowed'}
+                accessibilityState={{ disabled: !canDeleteCircle }}
+                disabled={!canDeleteCircle}
+                onPress={() => {
+                  setDeleteError(null);
+                  setDeleteVisible(true);
+                }}
+                style={({ pressed }) => [
+                  styles.dangerRow,
+                  {
+                    borderColor: canDeleteCircle ? colors.destructiveBorder : colors.border,
+                    backgroundColor: canDeleteCircle ? colors.destructiveSoft : colors.background,
+                    opacity: pressed && canDeleteCircle ? 0.75 : 1,
+                  },
+                ]}
+              >
+                <Feather name="trash-2" size={16} color={canDeleteCircle ? colors.destructive : colors.mutedForeground} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.dangerTitle, { color: canDeleteCircle ? colors.destructive : colors.mutedForeground }]}>
+                    Delete this circle
+                  </Text>
+                  <Text style={[styles.dangerCopy, { color: colors.mutedForeground }]}>
+                    {canDeleteCircle
+                      ? 'Removes the group, its ledger entries and its loans for good.'
+                      : 'Keep at least one circle — create another group before deleting this one.'}
+                  </Text>
+                </View>
+              </Pressable>
+            ) : null}
 
             {/* Modal Bottom Actions */}
             <View style={styles.modalActions}>
@@ -1093,6 +1152,52 @@ export function CircleDetailModal({
               <View style={{ flex: 1 }}>
                 <PrimaryButton label="Add to Circle" icon="check" onPress={handleAddMemberSubmit} />
               </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Circle Confirmation */}
+      <Modal visible={deleteVisible} transparent animationType={sheet.animationType} onRequestClose={() => { if (!deleting) setDeleteVisible(false); }}>
+        <View style={[sheet.shade, { backgroundColor: 'rgba(5, 8, 17, 0.70)' }]}>
+          <View style={[sheet.card, { backgroundColor: colors.card }]}>
+            <View style={[sheet.handle, { marginBottom: 18 }]} />
+            <Text style={[styles.modalEyebrow, { color: colors.destructive }]}>DELETE CIRCLE</Text>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Delete “{circle.name}”?</Text>
+            <Text style={[styles.modalHint, { color: colors.mutedForeground }]}>
+              {saved.length === 0
+                ? 'This group has no ledger entries. Deleting it cannot be undone.'
+                : `This removes the group, its ${saved.length} ledger ${saved.length === 1 ? 'entry' : 'entries'} and its loans. It cannot be undone.`}
+            </Text>
+            {deleteError ? (
+              <Text testID="delete-circle-error" style={[styles.saveError, { color: colors.destructive }]}>{deleteError}</Text>
+            ) : null}
+            <View style={styles.modalActions}>
+              <Pressable
+                onPress={() => setDeleteVisible(false)}
+                disabled={deleting}
+                style={({ pressed }) => [
+                  styles.cancelButton,
+                  { borderColor: colors.border, opacity: pressed || deleting ? 0.6 : 1 },
+                ]}
+              >
+                <Text style={[styles.cancelText, { color: colors.inkSoft }]}>Keep it</Text>
+              </Pressable>
+              <Pressable
+                testID="delete-circle-confirm"
+                accessibilityRole="button"
+                disabled={deleting}
+                onPress={handleDeleteCircle}
+                style={({ pressed }) => [
+                  styles.deleteConfirmButton,
+                  { backgroundColor: colors.destructive, opacity: pressed || deleting ? 0.75 : 1 },
+                ]}
+              >
+                <Feather name="trash-2" size={15} color={colors.destructiveForeground} />
+                <Text style={[styles.deleteConfirmText, { color: colors.destructiveForeground }]}>
+                  {deleting ? 'Deleting…' : 'Delete circle'}
+                </Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1272,6 +1377,11 @@ export const styles = StyleSheet.create({
   inviteRow: { flexDirection: 'row', gap: 10, alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 13 },
   inviteTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   inviteCopy: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 3 },
+  dangerRow: { flexDirection: 'row', gap: 10, alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 13, marginTop: 24, minHeight: 48 },
+  dangerTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  dangerCopy: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 3, lineHeight: 16 },
+  deleteConfirmButton: { flex: 1, minHeight: 49, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  deleteConfirmText: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
   // Governance & Members styling
   governanceCard: { borderWidth: 1, borderRadius: 18, padding: 16, marginTop: 16 },
   governanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },

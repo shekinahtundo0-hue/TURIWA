@@ -40,7 +40,7 @@ export default function HomeScreen() {
   const layout = useResponsive();
   const wide = layout.isDesktop;
   const router = useRouter();
-  const { circles, contributions, addContribution, loans, finance, user, hydrated, profileName, live, refresh, refreshing } = useTuriwa();
+  const { circles, contributions, addContribution, loans, finance, user, hydrated, profileName, live, liveError, refresh, refreshing } = useTuriwa();
   const [modalVisible, setModalVisible] = useState(false);
   const [contributionCircleId, setContributionCircleId] = useState<string | undefined>(undefined);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
@@ -93,7 +93,13 @@ export default function HomeScreen() {
       <Screen refreshing={refreshing} onRefresh={refresh}>
         <BrandHeader
           title={`${greetingFor(new Date())}, ${profileName}`}
-          subtitle={live ? 'Live with your Turiwa database.' : 'Connecting to your Turiwa database…'}
+          subtitle={
+            live
+              ? 'Live with your Turiwa database.'
+              : liveError
+                ? 'Not connected to your Turiwa database. Pull down to refresh.'
+                : 'Connecting to your Turiwa database…'
+          }
           onNotification={() => setNotificationsVisible(true)}
           notificationCount={notifications.length}
         />

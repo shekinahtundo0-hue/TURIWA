@@ -1,4 +1,5 @@
-import { eq, sql } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { circlesTable, contributionsTable, loansTable, usersTable } from "./schema";
 import type { AppDb } from "./client";
 
@@ -57,6 +58,7 @@ export async function ensureSchema(db: AppDb): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS circles (
       id TEXT PRIMARY KEY,
+      join_code TEXT,
       name TEXT NOT NULL,
       members INTEGER NOT NULL,
       target INTEGER NOT NULL,
@@ -70,6 +72,20 @@ export async function ensureSchema(db: AppDb): Promise<void> {
       color TEXT NOT NULL
     )
   `);
+  await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS join_code TEXT`);
+  // Give existing circles a code without changing their IDs, settings, or ledger.
+  // The predicate also makes concurrent API startups harmless.
+  const circlesMissingJoinCode = await db
+    .select({ id: circlesTable.id })
+    .from(circlesTable)
+    .where(isNull(circlesTable.joinCode));
+  for (const circle of circlesMissingJoinCode) {
+    await db
+      .update(circlesTable)
+      .set({ joinCode: randomBytes(8).toString("hex") })
+      .where(and(eq(circlesTable.id, circle.id), isNull(circlesTable.joinCode)));
+  }
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS circles_join_code_key ON circles (join_code)`);
   // Groups used to be monthly-only, so the old column name has to survive the
   // upgrade without losing anyone's saved amount.
   await db.execute(sql`

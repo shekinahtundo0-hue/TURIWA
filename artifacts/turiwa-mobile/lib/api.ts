@@ -123,6 +123,7 @@ export type CircleMember = {
 
 export type Circle = {
   id: string;
+  joinCode: string;
   name: string;
   members: number;
   // Roster rows waiting on an answer, counted beside the headcount, never in it.
@@ -305,11 +306,20 @@ async function parseError(response: Response): Promise<string> {
   return `Could not reach Turiwa (${response.status})`;
 }
 
+// Whatever screen started the call keeps its spinner until this promise settles, so a request
+// the network never answers must not stay pending: it would leave "Connecting…" on screen for
+// good. The bearer exchange after a Google sign-in is the slow one this exists for.
+const REQUEST_TIMEOUT_MS = 25_000;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const where = API_BASE || (Platform.OS === 'web' ? window.location.origin : 'the configured API');
   let response: Response;
   try {
     response = await fetch(`${API_BASE}/api${path}`, {
       ...init,
+      signal: controller.signal,
       headers: {
         Accept: 'application/json',
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
@@ -318,8 +328,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch {
-    const where = API_BASE || (Platform.OS === 'web' ? window.location.origin : 'the configured API');
+    if (controller.signal.aborted) {
+      throw new Error(`The Turiwa API at ${where} did not answer in time. Check the connection and try again.`);
+    }
     throw new Error(`Cannot reach the Turiwa API at ${where}.`);
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!response.ok) {
@@ -350,6 +364,21 @@ export function createCircle(draft: GroupDraft) {
   return request<AppState>('/circles', {
     method: 'POST',
     body: JSON.stringify(draft),
+  });
+}
+
+export function joinCircle(code: string) {
+  return request<AppState>('/circles/join', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+}
+
+// Closing a group takes its ledger and loans with it. The API refuses to leave the
+// account with no circle at all, so the last group cannot be deleted from anywhere.
+export function deleteCircle(circleId: string) {
+  return request<AppState>(`/circles/${encodeURIComponent(circleId)}`, {
+    method: 'DELETE',
   });
 }
 
@@ -479,7 +508,12 @@ export async function deleteAccount(password: string, code: string): Promise<voi
   });
 }
 
-export function subscribeToState(onState: (state: AppState) => void): () => void {
+// `onError` exists because a failed refresh used to be invisible: the screens kept the last
+// cached figures and the header went on saying it was connecting, for ever.
+export function subscribeToState(
+  onState: (state: AppState) => void,
+  onError?: (err: unknown) => void,
+): () => void {
   const query = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
   const url = `${API_BASE}/api/events${query}`;
   let closed = false;
@@ -493,8 +527,9 @@ export function subscribeToState(onState: (state: AppState) => void): () => void
     if (closed) return;
     try {
       onState(await fetchState());
-    } catch {
-      // Keep the last known state while reconnecting.
+    } catch (err) {
+      // Keep the last known state while reconnecting, but let the screen say so.
+      onError?.(err);
     }
   };
 

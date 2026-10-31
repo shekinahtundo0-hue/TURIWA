@@ -19,6 +19,9 @@ export type CircleMemberRow = {
 
 export const circlesTable = pgTable("circles", {
   id: text("id").primaryKey(),
+  // A private, shareable code lets a signed-in account join without exposing
+  // circle discovery or relying on the database row id as a secret.
+  joinCode: text("join_code").unique(),
   name: text("name").notNull(),
   // Head of active roster entries, kept in step with membersList.
   members: integer("members").notNull(),

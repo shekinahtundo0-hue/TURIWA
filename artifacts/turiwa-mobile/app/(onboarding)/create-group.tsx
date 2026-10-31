@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
+import { router, type Href } from 'expo-router';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { AuthHeader, AuthShell } from '@/components/AuthUI';
@@ -34,6 +34,9 @@ export default function CreateGroupScreen() {
         }}
         onCreated={() => router.replace('/(tabs)')}
       />
+      <Pressable onPress={() => router.push('/join-circle' as Href)} style={styles.joinLink}>
+        <Text style={[styles.skipText, { color: colors.primary }]}>Have an invite code? Join a circle</Text>
+      </Pressable>
       <Pressable onPress={() => router.replace('/(tabs)')} hitSlop={10} style={({ pressed }) => [styles.skip, { opacity: pressed ? 0.6 : 1 }]}>
         <Text style={[styles.skipText, { color: colors.mutedForeground }]}>Skip for now</Text>
       </Pressable>
@@ -49,5 +52,6 @@ const styles = StyleSheet.create({
   stepText: { fontFamily: 'Inter_600SemiBold', fontSize: 11.5 },
   stepLine: { flex: 1, height: 2, borderRadius: 2 },
   skip: { alignSelf: 'center', marginTop: 22, paddingVertical: 6 },
+  joinLink: { alignSelf: 'center', marginTop: 16, paddingVertical: 8 },
   skipText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
 });

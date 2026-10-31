@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "build:netlify": "node ./build-netlify.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:cloudflare": "node ./build-cloudflare-api.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.14",

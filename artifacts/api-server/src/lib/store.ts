@@ -1,4 +1,4 @@
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { desc, eq, inArray, or, sql } from "drizzle-orm";
 import {
   appMetaTable,
   circlesTable,
@@ -185,12 +185,20 @@ function rosterOf(circle: Circle, owner: User | undefined, paidIn: Map<string, n
   ];
 }
 
-// Every account only sees its own groups, the payments inside those groups, and
-// the loans it took out. A brand-new member therefore starts from an empty app.
+// Members see the circles they belong to, the shared circle ledger and loans in
+// those circles, plus their own standalone loans.
 export async function getState(userId: string): Promise<AppState> {
   const db = getDb();
   const [allCircles, version, [owner]] = await Promise.all([
-    db.select().from(circlesTable).where(eq(circlesTable.createdBy, userId)),
+    db
+      .select()
+      .from(circlesTable)
+      .where(
+        or(
+          eq(circlesTable.createdBy, userId),
+          sql`${circlesTable.membersList} @> ${JSON.stringify([{ id: userId }])}::jsonb AND NOT (${circlesTable.membersList} @> ${JSON.stringify([{ id: userId, status: "pending" }])}::jsonb)`,
+        ),
+      ),
     readVersion(),
     db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1),
   ]);
@@ -203,7 +211,12 @@ export async function getState(userId: string): Promise<AppState> {
           .from(contributionsTable)
           .where(inArray(contributionsTable.circleId, circleIds))
           .orderBy(desc(contributionsTable.createdAt)),
-    db.select().from(loansTable).where(eq(loansTable.userId, userId)),
+    circleIds.length === 0
+      ? db.select().from(loansTable).where(eq(loansTable.userId, userId))
+      : db
+          .select()
+          .from(loansTable)
+          .where(or(eq(loansTable.userId, userId), inArray(loansTable.circleId, circleIds))),
   ]);
 
   // What each member has actually paid into each group, counted from the ledger.
@@ -230,6 +243,7 @@ export async function getState(userId: string): Promise<AppState> {
       const active = membersList.filter((member) => member.status === "active").length;
       return {
         id: circle.id,
+        joinCode: circle.joinCode ?? "",
         name: circle.name,
         // The headcount is the roster's active entries, so the two can never
         // disagree on screen. An invite nobody has accepted is not a member yet,
@@ -284,5 +298,18 @@ export async function publishState(userId: string): Promise<AppState> {
   await bumpVersion();
   const state = await getState(userId);
   await publish("state", state, userId);
+  const memberIds = new Set(
+    state.circles.flatMap((circle) =>
+      (circle.membersList ?? [])
+        .filter((member) => member.status !== "pending")
+        .map((member) => member.id),
+    ),
+  );
+  memberIds.delete(userId);
+  await Promise.all(
+    [...memberIds].map(async (memberId) => {
+      await publish("state", await getState(memberId), memberId);
+    }),
+  );
   return state;
 }

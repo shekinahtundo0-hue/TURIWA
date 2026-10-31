@@ -88,10 +88,14 @@ type TuriwaContextValue = {
   profileName: string;
   user: AuthUser | null;
   live: boolean;
+  /** Why the app is not showing the database's figures right now, empty while all is well. */
+  liveError: string;
   refreshing: boolean;
   refresh: () => Promise<void>;
   addContribution: (amount: number, note: string, circleId?: string, entry?: LedgerEntry) => Promise<void>;
   createCircle: (draft: GroupDraft) => Promise<void>;
+  joinCircle: (code: string) => Promise<void>;
+  deleteCircle: (circleId: string) => Promise<void>;
   applyForLoan: (amount: number, purpose: string, circleId?: string) => Promise<void>;
   repayLoan: (amount: number, loanId?: string) => Promise<void>;
   approveLoan: (loanId: string) => Promise<void>;
@@ -146,6 +150,7 @@ function normalizeCircle(raw: Partial<Circle> & { monthly?: number }, user: Auth
 
   return {
     id: raw.id ?? '',
+    joinCode: raw.joinCode ?? '',
     name: raw.name ?? '',
     // Someone the app cannot name is not a member, and an invite nobody has
     // answered is not either, so the headcount is the active roster.
@@ -208,6 +213,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const [signedIn, setSignedIn] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [live, setLive] = useState(false);
+  const [liveError, setLiveError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
   const userId = user?.id ?? '';
@@ -225,6 +231,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     setContributions(normalizedRows);
     setLoans(normalizedLoans);
     setLive(true);
+    setLiveError('');
     if (!userId) return;
     await Promise.all([
       AsyncStorage.setItem(cacheKey(userId, 'circles'), JSON.stringify(normalizedCircles)),
@@ -305,9 +312,14 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    return api.subscribeToState((state) => {
-      void applyState(state);
-    });
+    return api.subscribeToState(
+      (state) => {
+        void applyState(state);
+      },
+      (err) => {
+        setLiveError(err instanceof Error ? err.message : 'The Turiwa API did not answer.');
+      },
+    );
   }, [hydrated, signedIn, userId]);
 
   const refresh = async () => {
@@ -334,6 +346,16 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const createCircle = async (draft: GroupDraft) => {
     const res = await api.createCircle(draft);
     await applyState(res);
+  };
+
+  const joinCircle = async (code: string) => {
+    await applyState(await api.joinCircle(code));
+  };
+
+  // The API answers with the state after the group and its ledger are gone, so the
+  // screens drop the closed group from the same response that removed it.
+  const deleteCircle = async (circleId: string) => {
+    await applyState(await api.deleteCircle(circleId));
   };
 
   const applyForLoan = async (amount: number, purpose: string, circleId?: string) => {
@@ -566,10 +588,13 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       profileName,
       user,
       live,
+      liveError,
       refreshing,
       refresh,
       addContribution,
       createCircle,
+      joinCircle,
+      deleteCircle,
       applyForLoan,
       repayLoan,
       approveLoan,
@@ -594,6 +619,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       profileName,
       user,
       live,
+      liveError,
       hydrated,
       refreshing,
     ],

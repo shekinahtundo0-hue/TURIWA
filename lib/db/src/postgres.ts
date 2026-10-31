@@ -40,9 +40,22 @@ export function databaseDriver(url: string): "supabase" | "postgres" | "pglite" 
   return "postgres";
 }
 
+function onHyperdrive(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase().endsWith(".hyperdrive.local");
+  } catch {
+    return false;
+  }
+}
+
 export function postgresPoolConfig(url: string): pg.PoolConfig {
   const lower = url.toLowerCase();
+  // Hyperdrive terminates TLS at the origin, where Supabase's own CA is installed, and serves
+  // the Worker over a private plaintext socket. Asking pg to start its own SSLRequest there
+  // would be a second, unsupported handshake.
+  const viaHyperdrive = onHyperdrive(url);
   const wantsSsl =
+    !viaHyperdrive &&
     !lower.includes("sslmode=disable") &&
     (isSupabaseUrl(url) ||
       process.env.DATABASE_SSL === "true" ||
@@ -50,10 +63,10 @@ export function postgresPoolConfig(url: string): pg.PoolConfig {
       lower.includes("sslmode=verify-full") ||
       lower.includes("sslmode=prefer"));
 
-  // Supabase endpoints present certificates that Node's default CA store cannot verify inside a
-  // Worker, so TLS is enabled without strict verification. The transaction pooler (port 6543)
-  // advertises a public CA but `pg` on Workers still fails verification; disabling rejection is
-  // the only path that has produced a live connection so far.
+  // The direct Supabase host and the pooler both serve a certificate signed by "Supabase Root
+  // 2021 CA". Node outside a Worker trusts it once asked not to verify; workerd ignores
+  // `rejectUnauthorized` and rejects the chain outright, which is why a Worker reaches Postgres
+  // through Hyperdrive instead.
   const isWorker = onCloudflareWorkers();
   const ssl = wantsSsl ? { rejectUnauthorized: false } : undefined;
 

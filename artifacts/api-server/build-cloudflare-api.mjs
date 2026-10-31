@@ -4,8 +4,10 @@ import { build as esbuild } from "esbuild";
 import { mkdir } from "node:fs/promises";
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
-const outDir = path.resolve(artifactDir, "..", "turiwa-mobile", "functions", "api");
-const outFile = path.join(outDir, "cloudflare-bundle.mjs");
+// This bundle is the Worker's entry point. Wrangler's own bundler cannot resolve the workspace
+// packages or the `workerd` export condition the Postgres driver needs, so it is prebuilt here.
+const outDir = path.resolve(artifactDir, "dist");
+const outFile = path.join(outDir, "cloudflare-worker.mjs");
 
 await mkdir(outDir, { recursive: true });
 
