@@ -1,17 +1,16 @@
 import React from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useTheme } from '@/context/ThemeContext';
 import { useResponsive } from '@/hooks/useResponsive';
 import { Feather } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
-import { Redirect, Tabs, usePathname, useRouter, type Href } from 'expo-router';
+import { Redirect, Tabs } from 'expo-router';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { SymbolView } from 'expo-symbols';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTuriwa } from '@/context/TuriwaContext';
-import { TuriwaLogo } from '@/components/TuriwaLogo';
+import { AppRail } from '@/components/AppNav';
 
 // IMPORTANT: iOS 26 uses NativeTabs for native tabs with liquid glass support.
 // NativeTabs intentionally does NOT use custom design tokens — liquid glass
@@ -58,6 +57,8 @@ function ClassicTabLayout() {
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.mutedForeground,
         headerShown: false,
+        // 12px keeps the tab labels legible; the platform default rendered them at 10.
+        tabBarLabelStyle: { fontSize: 12 },
         tabBarStyle: {
           position: 'absolute',
           backgroundColor: isIOS ? 'transparent' : colors.background,
@@ -131,54 +132,13 @@ function ClassicTabLayout() {
   );
 }
 
-// The rail mirrors the bottom bar's five destinations, in the same order the
-// native tabs use.
-const railItems: { name: string; label: string; icon: keyof typeof Feather.glyphMap; href: Href }[] = [
-  { name: 'index', label: 'Home', icon: 'home', href: '/' },
-  { name: 'circles', label: 'Circles', icon: 'users', href: '/circles' },
-  { name: 'loans', label: 'Loans', icon: 'credit-card', href: '/loans' },
-  { name: 'activity', label: 'Activity', icon: 'bar-chart-2', href: '/activity' },
-  { name: 'profile', label: 'Profile', icon: 'user', href: '/profile' },
-];
-
-function SideRail() {
-  const colors = useColors();
-  const router = useRouter();
-  const pathname = usePathname();
-  const insets = useSafeAreaInsets();
-  return (
-    <View style={[styles.rail, { backgroundColor: colors.card, borderRightColor: colors.border, paddingTop: insets.top + 18, paddingBottom: insets.bottom + 18 }]}>
-      <View style={[styles.railMark, { backgroundColor: colors.successSoft }]}>
-        <TuriwaLogo size={24} />
-      </View>
-      {railItems.map((item) => {
-        const active = item.name === 'index' ? pathname === '/' : pathname.startsWith(`/${item.name}`);
-        return (
-          <Pressable
-            key={item.name}
-            onPress={() => router.push(item.href)}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={item.label}
-            style={({ pressed }) => [styles.railItem, { opacity: pressed ? 0.65 : 1 }]}
-          >
-            {active ? <View style={[styles.railIndicator, { backgroundColor: colors.primary }]} /> : null}
-            <Feather name={item.icon} size={19} color={active ? colors.primary : colors.mutedForeground} />
-            <Text style={[styles.railLabel, { color: active ? colors.primary : colors.mutedForeground }]}>{item.label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-// Desktop and wide Android/web windows trade the bottom bar for a left rail, so
-// the tabs stop competing with the content for the width of the screen.
-function DesktopTabLayout() {
+// The rail lives in AppNav so the secondary screens outside this tab group can
+// show the same navigation instead of dropping to a bare column.
+function RailTabLayout() {
   const colors = useColors();
   return (
     <View style={[styles.desktop, { backgroundColor: colors.background }]}>
-      <SideRail />
+      <AppRail />
       <View style={styles.desktopScene}>
         <Tabs
           screenOptions={{
@@ -207,7 +167,7 @@ export default function TabLayout() {
     return <NativeTabLayout />;
   }
   if (useSidebar) {
-    return <DesktopTabLayout />;
+    return <RailTabLayout />;
   }
   return <ClassicTabLayout />;
 }
@@ -215,9 +175,4 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   desktop: { flex: 1, flexDirection: 'row' },
   desktopScene: { flex: 1 },
-  rail: { width: 92, borderRightWidth: 1, alignItems: 'center', gap: 6 },
-  railMark: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  railItem: { width: 76, height: 60, borderRadius: 15, alignItems: 'center', justifyContent: 'center', gap: 4, position: 'relative' },
-  railIndicator: { position: 'absolute', left: 0, top: 16, bottom: 16, width: 3, borderRadius: 2 },
-  railLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 10.5 },
 });

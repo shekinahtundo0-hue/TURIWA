@@ -291,7 +291,7 @@ export function GroupForm({
 
 const styles = StyleSheet.create({
   wrap: { gap: 2 },
-  label: { fontFamily: 'Inter_700Bold', fontSize: 10.5, letterSpacing: 1.4, marginTop: 16, marginBottom: 8 },
+  label: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.4, marginTop: 16, marginBottom: 8 },
   input: { borderWidth: 1, height: 52, borderRadius: 14, paddingHorizontal: 14, fontFamily: 'Inter_400Regular', fontSize: 14 },
   inputAmount: { flexDirection: 'row', alignItems: 'center' },
   plainInput: { flex: 1, fontFamily: 'Inter_700Bold', fontSize: 18 },

@@ -1,12 +1,10 @@
 import { Router, type IRouter } from "express";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import {
   authCodesTable,
   circlesTable,
-  contributionsTable,
   getDb,
   hashPassword,
-  loansTable,
   sessionsTable,
   usersTable,
   verifyPassword,
@@ -169,39 +167,44 @@ router.delete("/account", requireAuth, async (req, res) => {
     res.status(401).json({ message: "Your password is not right. Try again." });
     return;
   }
+  const db = getDb();
+  const ownedCircles = await db
+    .select({ id: circlesTable.id, name: circlesTable.name })
+    .from(circlesTable)
+    .where(eq(circlesTable.createdBy, user.id));
+  if (ownedCircles.length > 0) {
+    res.status(409).json({
+      message: `Transfer Primary Admin ownership for ${ownedCircles.map((circle) => circle.name).join(", ")} before deleting this account. Circle records and financial history will be retained.`,
+    });
+    return;
+  }
   const factor = await consumeSecondFactor(user, String(req.body?.code ?? ""));
   if (!factor.ok) {
     res.status(401).json({ message: "Enter the code from your authenticator app or a backup code." });
     return;
   }
 
-  const db = getDb();
-  const ownedCircles = await db
-    .select({ id: circlesTable.id })
-    .from(circlesTable)
-    .where(eq(circlesTable.createdBy, user.id));
-  const circleIds = ownedCircles.map((circle) => circle.id);
-
-  await db
-    .delete(contributionsTable)
-    .where(
-      or(
-        eq(contributionsTable.userId, user.id),
-        ...(circleIds.length > 0 ? [inArray(contributionsTable.circleId, circleIds)] : []),
-      ),
-    );
-  await db.delete(circlesTable).where(eq(circlesTable.createdBy, user.id));
-  await db.delete(loansTable).where(eq(loansTable.userId, user.id));
-  await db.delete(sessionsTable).where(eq(sessionsTable.userId, user.id));
-  if (user.phone) {
-    await db
-      .delete(authCodesTable)
-      .where(and(eq(authCodesTable.phone, user.phone), or(eq(authCodesTable.purpose, "signup"), eq(authCodesTable.purpose, "reset"))));
-  }
-  await db.delete(usersTable).where(eq(usersTable.id, user.id));
+  await db.transaction(async (tx) => {
+    // Keep the ledger, loans and circles intact. Remove the account from active
+    // rosters so authorization ends immediately while the audit trail survives.
+    const circles = await tx.select().from(circlesTable);
+    for (const circle of circles) {
+      const roster = circle.membersList ?? [];
+      if (!roster.some((member) => member.id === user.id && (member.status ?? "active") !== "removed")) continue;
+      const nextRoster = roster.map((member) => member.id === user.id
+        ? { ...member, status: "removed" as const, removedAt: new Date().toISOString(), removedBy: user.id }
+        : member);
+      await tx.update(circlesTable).set({ membersList: nextRoster, members: nextRoster.filter((member) => (member.status ?? "active") === "active").length }).where(eq(circlesTable.id, circle.id));
+    }
+    await tx.delete(sessionsTable).where(eq(sessionsTable.userId, user.id));
+    if (user.phone) {
+      await tx.delete(authCodesTable).where(and(eq(authCodesTable.phone, user.phone), or(eq(authCodesTable.purpose, "signup"), eq(authCodesTable.purpose, "reset"))));
+    }
+    await tx.delete(usersTable).where(eq(usersTable.id, user.id));
+  });
   logger.info(
-    { userId: user.id, circles: circleIds.length, usedBackupCode: factor.usedBackupCode },
-    "Account deleted with all data",
+    { userId: user.id, usedBackupCode: factor.usedBackupCode },
+    "Account deleted; financial and circle audit records retained",
   );
   res.status(204).end();
 });

@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useResponsive } from '@/hooks/useResponsive';
@@ -9,6 +9,7 @@ import type { Contribution } from '@/lib/api';
 import { currentMonthKey, entryDate, isLentOut, isOverdue, isOutflow, isSetAside, kesLabel, memberLabel, plannedPerMonth, recentMonthKeys } from '@/lib/api';
 import { ALL_PERIODS, buildStatement, csvFileName, goalEstimate, ledgerCsv, loanTie, monthlySummary, periodLabel, saveCsv, statementCsv, type Period } from '@/lib/statement';
 import { BrandHeader, PrimaryButton, Screen, SectionHeading, styles as uiStyles, useSheet } from '@/components/TuriwaUI';
+import { AppChrome, useSubScreenBack } from '@/components/AppNav';
 
 /**
  * Both statements a member and a treasurer ask for, drawn from the same rows the app
@@ -20,11 +21,18 @@ import { BrandHeader, PrimaryButton, Screen, SectionHeading, styles as uiStyles,
 export default function StatementScreen() {
   const colors = useColors();
   const layout = useResponsive();
-  const { contributions, circles, loans, finance, profileName } = useTuriwa();
+  const onBack = useSubScreenBack();
+  const { contributions, circles, loans, finance, activeCircleId, profileName } = useTuriwa();
   const [who, setWho] = useState<'mine' | 'group'>('mine');
   const [period, setPeriod] = useState<Period>(currentMonthKey());
   const [circleId, setCircleId] = useState<string>('All');
   const [reportOpen, setReportOpen] = useState(false);
+  // The group statement opens on the circle the person is working in. 'All groups' stays
+  // a choice, but it should not be the view that follows someone quietly into a circle
+  // they have just switched away from.
+  useEffect(() => {
+    if (activeCircleId) setCircleId(activeCircleId);
+  }, [activeCircleId]);
 
   // Newest first, plus the whole history: a period with no rows still shows as a
   // period, and the report says it found nothing rather than hiding the month.
@@ -81,9 +89,11 @@ export default function StatementScreen() {
   };
 
   return (
+    <AppChrome>
     <View style={styles.root}>
       <Screen>
         <BrandHeader
+          onBack={onBack}
           title="Statements"
           subtitle="What the ledger holds, added up. Download it whenever you want — your own records are not a paid feature."
         />
@@ -237,8 +247,8 @@ export default function StatementScreen() {
           <>
             <SectionHeading title="Lending and obligations" />
             <View style={[styles.bridge, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <BridgeLine label="Still owed to these groups" value={loansInScope.filter((loan) => loan.status === 'Active').reduce((sum, loan) => sum + loan.balance, 0)} tone="total" />
-              <BridgeLine label="Past their due date" value={finance.overdueOwed} tone="plain" />
+              <BridgeLine label={circleId === 'All' ? 'Still owed to these groups' : 'Still owed to this circle'} value={loansInScope.filter((loan) => loan.status === 'Active').reduce((sum, loan) => sum + loan.balance, 0)} tone="total" />
+              <BridgeLine label="Past their due date" value={loansInScope.filter((loan) => loan.status === 'Active' && isOverdue(loan)).reduce((sum, loan) => sum + loan.balance, 0)} tone="plain" />
               <BridgeLine label="Waiting for a decision" value={loansInScope.filter((loan) => loan.status === 'Pending').reduce((sum, loan) => sum + loan.principal, 0)} tone="plain" />
             </View>
             <Text style={[styles.note, { color: colors.mutedForeground }]}>
@@ -312,6 +322,7 @@ export default function StatementScreen() {
         rows={statement.rows}
       />
     </View>
+    </AppChrome>
   );
 }
 
@@ -386,7 +397,7 @@ function DiscrepancySheet({ visible, onClose, groupName, period, rows }: { visib
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={sheet.handle} />
             <Text style={[styles.sheetEyebrow, { color: colors.primary }]}>DISCREPANCY REPORT</Text>
             <Text style={[styles.sheetTitle, { color: colors.foreground }]}>Something looks wrong</Text>
@@ -426,14 +437,14 @@ const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', borderRadius: 13, padding: 4, marginTop: 18 },
   tab: { flex: 1, minHeight: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   tabText: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
-  pickerLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.4, marginTop: 18, marginBottom: 8 },
+  pickerLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.4, marginTop: 18, marginBottom: 8 },
   chipRow: { gap: 8, paddingRight: 8 },
   chip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center' },
   chipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   bridge: { borderWidth: 1, borderRadius: 18, padding: 16 },
   bridgeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14, paddingVertical: 5 },
   bridgeLabel: { fontFamily: 'Inter_500Medium', fontSize: 12, flexShrink: 1 },
-  bridgeValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13.5, fontVariant: ['tabular-nums'] },
+  bridgeValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13.5, fontVariant: ['tabular-nums'], flexShrink: 0 },
   note: { fontFamily: 'Inter_400Regular', fontSize: 11.5, lineHeight: 17, marginTop: 10 },
   summary: { borderWidth: 1, borderRadius: 18, padding: 16, gap: 9 },
   summaryLine: { fontFamily: 'Inter_500Medium', fontSize: 12.5, lineHeight: 19 },
@@ -441,14 +452,14 @@ const styles = StyleSheet.create({
   loanRow: { borderWidth: 1, borderRadius: 16, padding: 14 },
   loanPurpose: { fontFamily: 'Inter_600SemiBold', fontSize: 13.5 },
   loanMeta: { fontFamily: 'Inter_400Regular', fontSize: 11.5, lineHeight: 17, marginTop: 5 },
-  loanRef: { fontFamily: 'Inter_500Medium', fontSize: 10, marginTop: 7, letterSpacing: 0.3 },
+  loanRef: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 7, letterSpacing: 0.3 },
   goalList: { gap: 4, marginTop: 6 },
   rowList: { marginTop: 4 },
   entryRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, paddingVertical: 12 },
   entryMain: { flex: 1 },
   entryNote: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-  entryMeta: { fontFamily: 'Inter_400Regular', fontSize: 10.5, marginTop: 4 },
-  entryRef: { fontFamily: 'Inter_500Medium', fontSize: 9.5, marginTop: 3, letterSpacing: 0.4 },
+  entryMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4 },
+  entryRef: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
   entryAmount: { fontFamily: 'Inter_700Bold', fontSize: 13, fontVariant: ['tabular-nums'] },
   empty: { borderWidth: 1, borderRadius: 18, padding: 22, alignItems: 'center' },
   emptyTitle: { fontFamily: 'Inter_700Bold', fontSize: 15, marginTop: 12 },
@@ -463,7 +474,7 @@ const styles = StyleSheet.create({
   sheetHint: { fontFamily: 'Inter_400Regular', fontSize: 12.5, lineHeight: 19, marginTop: 7 },
   sheetInput: { borderWidth: 1, minHeight: 92, borderRadius: 14, padding: 13, fontFamily: 'Inter_400Regular', fontSize: 14, marginTop: 16, textAlignVertical: 'top' },
   preview: { borderWidth: 1, borderRadius: 14, padding: 12, marginTop: 14 },
-  previewText: { fontFamily: 'Inter_400Regular', fontSize: 10.5, lineHeight: 16 },
+  previewText: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16 },
   feedback: { fontFamily: 'Inter_600SemiBold', fontSize: 11.5, marginTop: 12 },
   sheetActions: { flexDirection: 'row', gap: 10, marginTop: 18, alignItems: 'center' },
   sheetCancel: { height: 49, paddingHorizontal: 17, borderRadius: 14, borderWidth: 1, justifyContent: 'center' },

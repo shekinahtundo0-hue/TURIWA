@@ -1,12 +1,23 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import React from 'react';
-import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useResponsive } from '@/hooks/useResponsive';
-import { cycleNoun, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type Circle, type CircleMember, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
+import { cycleNoun, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type AppNotification, type Circle, type CircleMember, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
 import { circleInviteUrl } from '@/lib/circleInvite';
+
+function confirmCircleAction(title: string, message: string, action: string, onConfirm: () => void, destructive = false) {
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) onConfirm();
+    return;
+  }
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: action, style: destructive ? 'destructive' : 'default', onPress: onConfirm },
+  ]);
+}
 
 // "3 two-week cycles", "1 month", "5 weeks" - the pace copy has to read well for
 // every frequency the group sets.
@@ -14,6 +25,38 @@ function cyclePhrase(count: number, frequency: Frequency): string {
   if (frequency === 'Bi-weekly') return `${count} ${count === 1 ? 'two-week cycle' : 'two-week cycles'}`;
   const noun = frequencyNoun(frequency);
   return `${count} ${count === 1 ? noun : `${noun}s`}`;
+}
+
+// React Native has no reachability API without a native module, so this covers the
+// web export, where the browser reports it, and stays silent on device rather than
+// guessing. Cached numbers get labelled instead of being passed off as current.
+function useOnlineStatus() {
+  const [online, setOnline] = useState(() => Platform.OS !== 'web' || navigator.onLine);
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    return () => {
+      window.removeEventListener('online', up);
+      window.removeEventListener('offline', down);
+    };
+  }, []);
+  return online;
+}
+
+export function OfflineBanner() {
+  const colors = useColors();
+  if (!useOnlineStatus()) {
+    return (
+      <View accessibilityRole="alert" style={[styles.offlineBanner, { backgroundColor: colors.warmSurface, borderColor: colors.goldBorder }]}>
+        <Feather name="wifi-off" size={15} color={colors.accentForeground} />
+        <Text style={[styles.offlineText, { color: colors.inkSoft }]}>You are offline. These are the last figures loaded, so they may be out of date.</Text>
+      </View>
+    );
+  }
+  return null;
 }
 
 export function Screen({ children, scroll = true, refreshing = false, onRefresh }: { children: React.ReactNode; scroll?: boolean; refreshing?: boolean; onRefresh?: () => void }) {
@@ -25,7 +68,10 @@ export function Screen({ children, scroll = true, refreshing = false, onRefresh 
   if (!scroll) {
     return (
       <View style={[styles.screen, { backgroundColor: colors.background }, padding]}>
-        <View style={column}>{children}</View>
+        <View style={column}>
+          <OfflineBanner />
+          {children}
+        </View>
       </View>
     );
   }
@@ -36,14 +82,18 @@ export function Screen({ children, scroll = true, refreshing = false, onRefresh 
       showsVerticalScrollIndicator={false}
       refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} /> : undefined}
     >
-      <View style={column}>{children}</View>
+      <View style={column}>
+        <OfflineBanner />
+        {children}
+      </View>
     </ScrollView>
   );
 }
 
 /**
- * Shared presentation for the app's sheets: a bottom sheet on phones and tablets,
- * a centered dialog on desktop where a sheet would stretch across the window.
+ * Shared presentation for the app's sheets: a bottom sheet on phones, a centered
+ * dialog once there is real width, where a full-bleed sheet would stretch the form
+ * across the window and put its actions out of thumb reach.
  */
 export function useSheet(): {
   animationType: 'slide' | 'fade';
@@ -53,28 +103,34 @@ export function useSheet(): {
 } {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { isDesktop } = useResponsive();
+  const dialog = useResponsive().mode !== 'phone';
   return {
-    animationType: isDesktop ? 'fade' : 'slide',
-    shade: [styles.modalShade, isDesktop && styles.modalShadeDialog],
+    animationType: dialog ? 'fade' : 'slide',
+    shade: [styles.modalShade, dialog && styles.modalShadeDialog],
     card: [
       styles.modalCard,
-      isDesktop && styles.modalCardDialog,
-      { paddingBottom: isDesktop ? 24 : insets.bottom + 20 },
+      dialog && styles.modalCardDialog,
+      { paddingBottom: dialog ? 24 : insets.bottom + 20 },
     ],
     // The grabber only means "drag me down", which a centered dialog cannot do.
-    handle: [styles.modalHandle, { backgroundColor: colors.border }, isDesktop && styles.hidden],
+    handle: [styles.modalHandle, { backgroundColor: colors.border }, dialog && styles.hidden],
   };
 }
 
-export function BrandHeader({ eyebrow = 'TURIWA', title, subtitle, onNotification, notificationCount = 0, actions }: { eyebrow?: string; title: string; subtitle?: string; onNotification?: () => void; notificationCount?: number; actions?: React.ReactNode }) {
+export function BrandHeader({ eyebrow = 'TURIWA', title, subtitle, onNotification, notificationCount = 0, actions, onBack }: { eyebrow?: string; title: string; subtitle?: string; onNotification?: () => void; notificationCount?: number; actions?: React.ReactNode; onBack?: () => void }) {
   const colors = useColors();
+  const type = useResponsive().type;
   return (
     <View style={styles.header}>
+      {onBack ? (
+        <View style={styles.headerBack}>
+          <HeaderIconButton testID="header-back" icon="arrow-left" label="Back" onPress={onBack} />
+        </View>
+      ) : null}
       <View style={styles.headerCopy}>
-        <Text style={[styles.eyebrow, { color: colors.primary }]}>{eyebrow}</Text>
-        <Text numberOfLines={2} style={[styles.headerTitle, { color: colors.foreground }]}>{title}</Text>
-        {subtitle ? <Text style={[styles.headerSubtitle, { color: colors.mutedForeground }]}>{subtitle}</Text> : null}
+        <Text style={[styles.eyebrow, { color: colors.primary, fontSize: type.eyebrow }]}>{eyebrow}</Text>
+        <Text numberOfLines={2} style={[styles.headerTitle, { color: colors.foreground, fontSize: type.screenTitle }]}>{title}</Text>
+        {subtitle ? <Text style={[styles.headerSubtitle, { color: colors.mutedForeground, fontSize: type.subtitle }]}>{subtitle}</Text> : null}
       </View>
       <View style={styles.headerActions}>
         {actions}
@@ -112,10 +168,121 @@ export function HeaderIconButton({ testID, icon, label, onPress, active = false,
 
 export function SectionHeading({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
   const colors = useColors();
+  const type = useResponsive().type;
   return (
     <View style={styles.sectionHeading}>
-      <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{title}</Text>
-      {action ? <Pressable onPress={onAction}><Text style={[styles.actionText, { color: colors.primary }]}>{action}</Text></Pressable> : null}
+      <Text style={[styles.sectionTitle, { color: colors.foreground, fontSize: type.sectionTitle }]}>{title}</Text>
+      {action ? (
+        <Pressable
+          onPress={onAction}
+          accessibilityRole="button"
+          accessibilityLabel={action}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={({ pressed }) => [styles.sectionAction, { opacity: pressed ? 0.6 : 1 }]}
+        >
+          <Text style={[styles.actionText, { color: colors.primary }]}>{action}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Which set of books a screen is reading: the chosen circle's, or every circle the
+ * account has. Both are honest sums, so the choice is stated in the control rather
+ * than left for the reader to guess — and a long circle name truncates inside its own
+ * half of the row instead of pushing the layout sideways.
+ */
+export function CircleScopeToggle({ circleName, scopeAll, onChange }: { circleName: string | null; scopeAll: boolean; onChange: (scopeAll: boolean) => void }) {
+  const colors = useColors();
+  const activeTone = colors.primaryForeground;
+  const idleTone = colors.mutedForeground;
+  return (
+    <View style={[styles.scopeRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <Pressable
+        testID="scope-circle"
+        accessibilityRole="button"
+        accessibilityState={{ selected: !scopeAll, disabled: circleName === null }}
+        accessibilityLabel={circleName ? `Show only ${circleName}` : 'No circle is selected'}
+        disabled={circleName === null}
+        onPress={() => onChange(false)}
+        style={({ pressed }) => [styles.scopeChip, { borderColor: colors.border, backgroundColor: !scopeAll ? colors.primary : 'transparent', opacity: circleName === null ? 0.45 : pressed ? 0.85 : 1 }]}
+      >
+        <Text style={[styles.scopeChipText, { color: !scopeAll ? activeTone : idleTone }]} numberOfLines={1}>
+          {circleName ?? 'This circle'}
+        </Text>
+      </Pressable>
+      <Pressable
+        testID="scope-all"
+        accessibilityRole="button"
+        accessibilityState={{ selected: scopeAll }}
+        accessibilityLabel="Show every circle on this account"
+        onPress={() => onChange(true)}
+        style={({ pressed }) => [styles.scopeChip, { borderColor: colors.border, backgroundColor: scopeAll ? colors.primary : 'transparent', opacity: pressed ? 0.85 : 1 }]}
+      >
+        <Text style={[styles.scopeChipText, { color: scopeAll ? activeTone : idleTone }]} numberOfLines={1}>
+          All circles
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+/**
+ * The one empty state, so a screen with nothing to show reads the same everywhere:
+ * what is missing, why, and the way to change it.
+ */
+export function EmptyState({ icon, title, body, actionLabel, onAction }: { icon: keyof typeof Feather.glyphMap; title: string; body: string; actionLabel?: string; onAction?: () => void }) {
+  const colors = useColors();
+  return (
+    <View style={[styles.emptyState, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.emptyIcon, { backgroundColor: colors.successSoft }]}>
+        <Feather name={icon} size={22} color={colors.primary} />
+      </View>
+      <Text style={[styles.emptyTitle, { color: colors.foreground }]}>{title}</Text>
+      <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>{body}</Text>
+      {actionLabel && onAction ? <PrimaryButton label={actionLabel} compact onPress={onAction} /> : null}
+    </View>
+  );
+}
+
+/**
+ * Placeholders shaped like the rows that are coming. Deliberately static: an
+ * animated shimmer stops dead in a background tab, where no frames are drawn, and
+ * a stalled bar reads as a broken app rather than a slow one.
+ */
+export function SkeletonRows({ rows = 3 }: { rows?: number }) {
+  const colors = useColors();
+  return (
+    <View accessibilityRole="progressbar" accessibilityLabel="Loading">
+      {Array.from({ length: rows }, (_, index) => (
+        <View key={index} style={[styles.skeletonRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.skeletonIcon, { backgroundColor: colors.muted }]} />
+          <View style={styles.skeletonCopy}>
+            <View style={[styles.skeletonLine, { backgroundColor: colors.muted, width: '58%' }]} />
+            <View style={[styles.skeletonLine, { backgroundColor: colors.muted, width: '34%', marginTop: 8 }]} />
+          </View>
+          <View style={[styles.skeletonLine, { backgroundColor: colors.muted, width: 64 }]} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * The shape of a screen before its data arrives: title block, hero card, rows. A
+ * centered spinner leaves the whole column empty and reads as a failure, whereas
+ * holding the layout open tells the person the screen is there and simply not filled.
+ */
+export function ScreenSkeleton({ rows = 3 }: { rows?: number }) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  return (
+    <View accessibilityRole="progressbar" accessibilityLabel="Loading" style={{ paddingTop: insets.top + 24 }}>
+      <View style={[styles.skeletonLine, { backgroundColor: colors.muted, width: '38%', height: 11 }]} />
+      <View style={[styles.skeletonLine, { backgroundColor: colors.muted, width: '68%', height: 26, marginTop: 12 }]} />
+      <View style={[styles.skeletonHero, { backgroundColor: colors.card, borderColor: colors.border }]} />
+      <SkeletonRows rows={rows} />
     </View>
   );
 }
@@ -134,20 +301,22 @@ export function Amount({ value, size = 28, color, testID }: { value: number; siz
   );
 }
 
-export function PrimaryButton({ label, icon, onPress, compact = false }: { label: string; icon?: keyof typeof Feather.glyphMap; onPress: () => void; compact?: boolean }) {
+export function PrimaryButton({ label, icon, onPress, compact = false, disabled = false }: { label: string; icon?: keyof typeof Feather.glyphMap; onPress: () => void; compact?: boolean; disabled?: boolean }) {
   const colors = useColors();
   return (
     <Pressable
       testID={`button-${label.toLowerCase().replaceAll(' ', '-')}`}
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.primaryButtonOuter,
         {
           borderRadius: 14,
           transform: [{ scale: pressed ? 0.985 : 1 }],
-          opacity: pressed ? 0.88 : 1,
+          opacity: disabled ? 0.55 : pressed ? 0.88 : 1,
         },
       ]}
     >
@@ -251,12 +420,12 @@ export function CircleCard({
           </Text>
           {isAdmin ? (
             <View style={[styles.adminBadge, { backgroundColor: colors.goldSoft, borderColor: colors.goldBorder }]}>
-              <MaterialCommunityIcons name="crown" size={10} color={colors.accentForeground} style={{ marginRight: 3 }} />
+              <MaterialCommunityIcons name="crown" size={11} color={colors.accentForeground} style={{ marginRight: 3 }} />
               <Text style={[styles.adminBadgeText, { color: colors.accentForeground }]}>ADMIN</Text>
             </View>
           ) : isCoAdmin ? (
             <View style={[styles.adminBadge, { backgroundColor: colors.coAdminBadgeBg, borderColor: colors.secondary }]}>
-              <MaterialCommunityIcons name="shield-account" size={10} color={colors.secondary} style={{ marginRight: 3 }} />
+              <MaterialCommunityIcons name="shield-account" size={11} color={colors.secondary} style={{ marginRight: 3 }} />
               <Text style={[styles.adminBadgeText, { color: colors.secondary }]}>CO-ADMIN</Text>
             </View>
           ) : null}
@@ -398,7 +567,7 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
           <View style={sheet.handle} />
           <View style={styles.ledgerHead}>
             <View style={{ flex: 1 }}>
@@ -530,6 +699,7 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
           <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>MEMO / NOTES</Text>
           <TextInput testID="contribution-note" value={note} onChangeText={setNote} placeholder="e.g. April Contribution, Audit Fees…" placeholderTextColor={colors.mutedForeground} style={[styles.textInput, { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border, color: colors.foreground }]} />
           {error ? <Text style={[styles.saveError, { color: colors.destructive }]}>{error}</Text> : null}
+          </ScrollView>
 
           <Pressable
             testID="record-commit"
@@ -555,7 +725,6 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
               </View>
             )}
           </Pressable>
-          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -576,6 +745,7 @@ export function CircleDetailModal({
   onReviewLoans,
   onAssignCoAdmin,
   onRemoveCoAdmin,
+  onTransferPrimaryAdmin,
   onAddMember,
   canDeleteCircle = false,
   onDeleteCircle,
@@ -596,6 +766,7 @@ export function CircleDetailModal({
   onReviewLoans?: (circleId: string) => void;
   onAssignCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onRemoveCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
+  onTransferPrimaryAdmin?: (circleId: string, memberId: string) => Promise<void>;
   onAddMember?: (circleId: string, name: string, phone?: string) => Promise<{ success: boolean; message: string }>;
   /** Whether this account owns another circle to fall back on. The API refuses to
    *  delete the only one, so the control says that instead of offering it. */
@@ -685,16 +856,26 @@ export function CircleDetailModal({
 
   const handleMakeCoAdmin = async (memberId: string) => {
     if (!onAssignCoAdmin) return;
-    const res = await onAssignCoAdmin(circle.id, memberId);
-    setMemberActionFeedback(res.message);
-    setTimeout(() => setMemberActionFeedback(null), 3000);
+    const member = membersList.find((item) => item.id === memberId);
+    confirmCircleAction('Promote to Co-Admin?', `Give ${member?.name ?? 'this member'} Co-Admin access to ${circle.name}?`, 'Promote', () => {
+      void onAssignCoAdmin(circle.id, memberId).then((res) => setMemberActionFeedback(res.message)).catch((error) => setMemberActionFeedback(error instanceof Error ? error.message : 'Could not change this role.'));
+    });
   };
 
   const handleRemoveCoAdmin = async (memberId: string) => {
     if (!onRemoveCoAdmin) return;
-    const res = await onRemoveCoAdmin(circle.id, memberId);
-    setMemberActionFeedback(res.message);
-    setTimeout(() => setMemberActionFeedback(null), 3000);
+    const member = membersList.find((item) => item.id === memberId);
+    confirmCircleAction('Demote Co-Admin?', `Change ${member?.name ?? 'this Co-Admin'} to a regular Member?`, 'Demote', () => {
+      void onRemoveCoAdmin(circle.id, memberId).then((res) => setMemberActionFeedback(res.message)).catch((error) => setMemberActionFeedback(error instanceof Error ? error.message : 'Could not change this role.'));
+    });
+  };
+
+  const handleTransferPrimaryAdmin = (memberId: string) => {
+    if (!onTransferPrimaryAdmin) return;
+    const member = membersList.find((item) => item.id === memberId);
+    confirmCircleAction('Transfer Primary Admin?', `${member?.name ?? 'This member'} will become the Primary Admin. Your role will change to Member.`, 'Transfer', () => {
+      void onTransferPrimaryAdmin(circle.id, memberId).catch((error) => setMemberActionFeedback(error instanceof Error ? error.message : 'Could not transfer circle authority.'));
+    }, true);
   };
 
   const handleAddMemberSubmit = async () => {
@@ -769,7 +950,7 @@ export function CircleDetailModal({
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(5, 8, 17, 0.65)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card, borderTopColor: colors.border, borderWidth: 1 }]}>
-          <ScrollView style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={[sheet.handle, { marginBottom: 18 }]} />
 
             {/* Circle Header */}
@@ -1014,12 +1195,12 @@ export function CircleDetailModal({
                           </View>
                         ) : isAdminMember ? (
                           <View style={[styles.roleBadge, { backgroundColor: colors.goldSoft, borderColor: colors.gold }]}>
-                            <MaterialCommunityIcons name="crown" size={10} color={colors.accentForeground} style={{ marginRight: 2 }} />
+                            <MaterialCommunityIcons name="crown" size={11} color={colors.accentForeground} style={{ marginRight: 2 }} />
                             <Text style={[styles.roleBadgeText, { color: colors.accentForeground }]}>ADMIN</Text>
                           </View>
                         ) : isCoAdminMember ? (
                           <View style={[styles.roleBadge, { backgroundColor: colors.coAdminBadgeBg, borderColor: colors.secondary }]}>
-                            <MaterialCommunityIcons name="shield-account" size={10} color={colors.secondary} style={{ marginRight: 2 }} />
+                            <MaterialCommunityIcons name="shield-account" size={11} color={colors.secondary} style={{ marginRight: 2 }} />
                             <Text style={[styles.roleBadgeText, { color: colors.secondary }]}>CO-ADMIN</Text>
                           </View>
                         ) : (
@@ -1038,7 +1219,7 @@ export function CircleDetailModal({
                     </View>
 
                     {/* Admin Delegation Actions */}
-                    {isCircleAdmin && m.status === 'active' && !isAdminMember && onAssignCoAdmin && onRemoveCoAdmin ? (
+                    {hasAdminRights && m.status === 'active' && !isAdminMember && m.id !== currentUserId && onAssignCoAdmin && onRemoveCoAdmin ? (
                       <View style={styles.adminActionWrap}>
                         {isCoAdminMember ? (
                           <Pressable
@@ -1050,7 +1231,7 @@ export function CircleDetailModal({
                           >
                             <Text style={[styles.coAdminToggleText, { color: colors.destructive }]}>Dismiss</Text>
                           </Pressable>
-                        ) : coAdminsCount < 2 ? (
+                        ) : !isCoAdminMember && coAdminsCount < 2 ? (
                           <Pressable
                             onPress={() => handleMakeCoAdmin(m.id)}
                             style={({ pressed }) => [
@@ -1060,9 +1241,16 @@ export function CircleDetailModal({
                           >
                             <Text style={[styles.coAdminToggleText, { color: colors.secondary }]}>+ Co-Admin</Text>
                           </Pressable>
-                        ) : (
+                        ) : !isCoAdminMember ? (
                           <Text style={[styles.coAdminLimitNotice, { color: colors.mutedForeground }]}>Max 3 admins</Text>
-                        )}
+                        ) : null}
+                      </View>
+                    ) : null}
+                    {isCircleAdmin && m.status === 'active' && m.id !== currentUserId && onTransferPrimaryAdmin ? (
+                      <View style={styles.adminActionWrap}>
+                        <Pressable accessibilityRole="button" accessibilityLabel={`Transfer Primary Admin to ${m.name}`} onPress={() => handleTransferPrimaryAdmin(m.id)} style={({ pressed }) => [styles.coAdminToggleBtn, { borderColor: colors.gold, opacity: pressed ? 0.7 : 1 }]}>
+                          <Text style={[styles.coAdminToggleText, { color: colors.accentForeground }]}>Make Primary</Text>
+                        </Pressable>
                       </View>
                     ) : null}
                     {canRemoveMember && onRemoveCircleMember ? (
@@ -1478,63 +1666,130 @@ export function CircleDetailModal({
   );
 }
 
-// The bell badge and the sheet it opens must count the same rows, so both read
-// from this one derivation: no pending item, no badge.
-export function notificationItems(contributions: Contribution[], loans: Loan[], circles: Circle[]) {
-  const list: { id: string; icon: keyof typeof Feather.glyphMap; title: string; copy: string; date: string }[] = [];
-  for (const loan of loans) {
-    if (loan.status === 'Active') {
-      list.push({ id: `loan-${loan.id}`, icon: 'credit-card', title: 'Loan update', copy: `KES ${loan.balance.toLocaleString()} remaining on your "${loan.purpose}" loan.`, date: `Due ${loan.dueDate}` });
-    } else if (loan.status === 'Pending') {
-      list.push({ id: `loan-${loan.id}`, icon: 'clock', title: 'Loan application', copy: `Your "${loan.purpose}" loan request is under review.`, date: `Due ${loan.dueDate}` });
-    } else if (loan.status === 'Rejected') {
-      list.push({ id: `loan-${loan.id}`, icon: 'x-circle', title: 'Loan request declined', copy: `Your "${loan.purpose}" loan request was declined by the group admin.`, date: 'No money was paid out' });
-    } else {
-      list.push({ id: `loan-${loan.id}`, icon: 'check-circle', title: 'Loan paid off', copy: `Your "${loan.purpose}" loan is fully repaid. Well done!`, date: `Due ${loan.dueDate}` });
-    }
-  }
-  for (const item of contributions.slice(0, 4)) {
-    const circle = circles.find((entry) => entry.id === item.circleId);
-    const kind = item.type ?? 'Contribution';
-    if (kind === 'Fine') {
-      list.push({
-        id: `contribution-${item.id}`,
-        icon: 'alert-circle',
-        title: 'Late fine recorded',
-        copy: `KES ${item.amount.toLocaleString()} collected from ${item.member ?? 'a member'} in ${circle?.name ?? 'your circle'}.`,
-        date: item.date,
-      });
-      continue;
-    }
-    const verb = isOutflow(kind) ? 'paid out of' : isSetAside(kind) ? 'set aside from' : 'saved to';
-    const icon = isOutflow(kind) ? 'trending-down' : isSetAside(kind) ? 'bookmark' : 'trending-up';
-    list.push({ id: `contribution-${item.id}`, icon, title: `${kind} recorded`, copy: `KES ${item.amount.toLocaleString()} ${verb} ${circle?.name ?? 'your circle'}${item.member ? ` · ${item.member}` : ''}${item.status === 'Pending' ? ' · pending confirmation' : ''}.`, date: item.date });
-  }
-  return list;
+// The bell badge and the sheet it opens must count the same rows, so both read the
+// server's inbox: an unread row is one the API has not been told is read.
+const NOTIFICATION_ICON: Record<AppNotification['type'], keyof typeof Feather.glyphMap> = {
+  loan_application: 'file-text',
+  loan_approved: 'check-circle',
+  loan_rejected: 'x-circle',
+  loan_repayment: 'trending-up',
+  loan_due: 'clock',
+  loan_overdue: 'alert-triangle',
+  contribution: 'trending-up',
+  contribution_reminder: 'bell',
+  contribution_missed: 'alert-circle',
+  fine: 'alert-octagon',
+  member_joined: 'user-plus',
+  member_removed: 'user-minus',
+  role_changed: 'shield',
+  savings_goal: 'target',
+  savings_update: 'target',
+  meeting: 'calendar',
+  meeting_update: 'calendar',
+  proposal: 'message-square',
+  vote_reminder: 'message-square',
+  vote_result: 'bar-chart-2',
+  announcement: 'volume-2',
+};
+
+/** "Just now", "3 hours ago", "12 Oct" — the age of a message, in the same plain
+ *  language the ledger uses for its own rows. */
+function notificationAge(iso: string): string {
+  const at = new Date(iso).getTime();
+  if (Number.isNaN(at)) return '';
+  const minutes = Math.floor((Date.now() - at) / 60_000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-export function NotificationsModal({ visible, onClose, contributions, loans, circles }: { visible: boolean; onClose: () => void; contributions: Contribution[]; loans: Loan[]; circles: Circle[] }) {
+export function NotificationsModal({
+  visible,
+  onClose,
+  notifications,
+  unreadCount,
+  onMarkRead,
+  onMarkAllRead,
+  onOpen,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  notifications: AppNotification[];
+  unreadCount: number;
+  onMarkRead: (id: string) => Promise<void>;
+  onMarkAllRead: () => Promise<void>;
+  onOpen: (link: string) => void;
+}) {
   const colors = useColors();
   const sheet = useSheet();
-  const items = React.useMemo(() => notificationItems(contributions, loans, circles), [contributions, loans, circles]);
-  const ledgerShown = Math.min(4, contributions.length);
   return (
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={[sheet.handle, { marginBottom: 18 }]} />
             <Text style={[styles.modalEyebrow, { color: colors.primary }]}>TURIWA</Text>
-            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Notifications</Text>
-            <Text testID="notifications-hint" style={[styles.modalHint, { color: colors.mutedForeground }]}>{items.length === 0 ? 'The latest from your circles and loans.' : `${items.length} ${items.length === 1 ? 'item' : 'items'}: ${loans.length} ${loans.length === 1 ? 'loan' : 'loans'} and your ${ledgerShown} latest ${ledgerShown === 1 ? 'ledger entry' : 'ledger entries'}.`}</Text>
-            {items.length > 0 ? items.map((item) => (
-              <View key={item.id} testID={`notification-row-${item.id}`} style={[styles.detailRow, { borderBottomColor: colors.border }]}>
-                <View style={[styles.activityIcon, { backgroundColor: colors.successSoft }]}><Feather name={item.icon} size={16} color={colors.primary} /></View>
-                <View style={{ flex: 1 }}><Text style={[styles.detailRowNote, { color: colors.foreground }]}>{item.title}</Text><Text style={[styles.detailRowDate, { color: colors.mutedForeground }]}>{item.copy}</Text></View>
-                <Text style={[styles.detailRowDate, { color: colors.mutedForeground }]}>{item.date}</Text>
-              </View>
+            <View style={styles.notificationHead}>
+              <Text style={[styles.modalTitle, { color: colors.foreground }]}>Notifications</Text>
+              {unreadCount > 0 ? (
+                <Pressable
+                  testID="notifications-mark-all"
+                  accessibilityRole="button"
+                  accessibilityLabel="Mark all notifications as read"
+                  onPress={() => void onMarkAllRead()}
+                  style={({ pressed }) => [styles.markAllButton, { borderColor: colors.border, backgroundColor: colors.background, opacity: pressed ? 0.7 : 1 }]}
+                >
+                  <Feather name="check" size={13} color={colors.primary} />
+                  <Text style={[styles.markAllText, { color: colors.primary }]}>Mark all read</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <Text testID="notifications-hint" style={[styles.modalHint, { color: colors.mutedForeground }]}>
+              {notifications.length === 0
+                ? 'Messages about your circles, loans and money will appear here.'
+                : unreadCount > 0
+                  ? `${unreadCount} unread of ${notifications.length} ${notifications.length === 1 ? 'message' : 'messages'}.`
+                  : `${notifications.length} ${notifications.length === 1 ? 'message' : 'messages'}, all read.`}
+            </Text>
+            {notifications.length > 0 ? notifications.map((item) => (
+              <Pressable
+                key={item.id}
+                testID={`notification-row-${item.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={`${item.read ? '' : 'Unread: '}${item.title}. ${item.body}`}
+                onPress={() => {
+                  if (!item.read) void onMarkRead(item.id);
+                  if (item.link) onOpen(item.link);
+                }}
+                style={({ pressed }) => [
+                  styles.notificationRow,
+                  { borderBottomColor: colors.border, backgroundColor: item.read ? 'transparent' : colors.successSoft, opacity: pressed ? 0.75 : 1 },
+                ]}
+              >
+                <View style={[styles.activityIcon, { backgroundColor: item.read ? colors.muted : colors.card }]}>
+                  <Feather name={NOTIFICATION_ICON[item.type] ?? 'bell'} size={16} color={item.read ? colors.mutedForeground : colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.notificationTitleRow}>
+                    {item.read ? null : <View testID={`notification-unread-${item.id}`} style={[styles.unreadDot, { backgroundColor: colors.primary }]} />}
+                    <Text style={[styles.detailRowNote, { color: colors.foreground, flex: 1 }]} numberOfLines={2}>{item.title}</Text>
+                  </View>
+                  <Text style={[styles.detailRowDate, { color: colors.mutedForeground }]}>{item.body}</Text>
+                  <Text style={[styles.notificationMeta, { color: colors.mutedForeground }]}>
+                    {[item.circleName, notificationAge(item.createdAt)].filter(Boolean).join(' · ')}
+                  </Text>
+                </View>
+              </Pressable>
             )) : (
-              <View testID="notifications-empty" style={[styles.detailEmptyCard, { backgroundColor: colors.background, borderColor: colors.border }]}><Feather name="check-circle" size={22} color={colors.success} /><Text style={[styles.detailEmptyTitle, { color: colors.foreground }]}>All caught up</Text><Text style={[styles.detailEmpty, { color: colors.mutedForeground }]}>Nothing new right now — your contributions and loans will show up here.</Text></View>
+              <View testID="notifications-empty" style={[styles.detailEmptyCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                <Feather name="bell" size={22} color={colors.success} />
+                <Text style={[styles.detailEmptyTitle, { color: colors.foreground }]}>Nothing yet</Text>
+                <Text style={[styles.detailEmpty, { color: colors.mutedForeground }]}>When somebody pays, applies for a loan or joins your circle, the message lands here and stays until you read it.</Text>
+              </View>
             )}
             <View style={styles.modalActions}>
               <View style={{ flex: 1 }}><PrimaryButton label="Done" icon="check" onPress={onClose} /></View>
@@ -1548,9 +1803,12 @@ export function NotificationsModal({ visible, onClose, contributions, loans, cir
 
 export const styles = StyleSheet.create({
   screen: { flex: 1 },
+  offlineBanner: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 14, paddingHorizontal: 13, paddingVertical: 11, marginBottom: 12 },
+  offlineText: { fontFamily: 'Inter_500Medium', fontSize: 12, lineHeight: 17, flex: 1 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 25 },
   // Long names (e.g. "Good morning, <name>") must wrap inside the column rather than run under the bell.
   headerCopy: { flex: 1, paddingRight: 12 },
+  headerBack: { marginRight: 12, paddingTop: 20 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 12, letterSpacing: 2.2, marginBottom: 8 },
   headerTitle: { fontFamily: 'Inter_700Bold', fontSize: 28, letterSpacing: -0.8 },
@@ -1559,15 +1817,21 @@ export const styles = StyleSheet.create({
   notificationBadge: { position: 'absolute', right: 3, top: 3, minWidth: 17, height: 17, borderRadius: 9, borderWidth: 1.5, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
   notificationBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 11, lineHeight: 13 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 28, marginBottom: 13 },
+  scopeRow: { flexDirection: 'row', gap: 8, marginBottom: 12, borderWidth: 1, borderRadius: 14, padding: 4 },
+  scopeChip: { flexGrow: 1, flexBasis: 0, minWidth: 0, minHeight: 44, borderRadius: 11, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  scopeChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5, textAlign: 'center' },
   sectionTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 17, letterSpacing: -0.2 },
+  sectionAction: { minHeight: 44, paddingLeft: 12, alignItems: 'flex-end', justifyContent: 'center' },
   actionText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   amountContainer: { flexDirection: 'row', alignItems: 'baseline' },
   currencyTag: { fontFamily: 'Inter_600SemiBold', letterSpacing: 0.4, opacity: 0.8 },
   amountValue: { fontFamily: 'Inter_700Bold', letterSpacing: -0.8 },
-  primaryButtonOuter: { overflow: 'hidden' },
-  primaryButtonGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  // Stretch so a primary action fills its column instead of hugging its own label,
+  // and keep the compact variant at the 44px touch minimum.
+  primaryButtonOuter: { overflow: 'hidden', alignSelf: 'stretch' },
+  primaryButtonGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 44 },
   primaryButtonText: { fontFamily: 'Inter_600SemiBold' },
-  statPill: { borderRadius: 18, borderWidth: 1, padding: 13, flex: 1, flexDirection: 'row', gap: 11, alignItems: 'center' },
+  statPill: { borderRadius: 18, borderWidth: 1, padding: 13, flex: 1, minWidth: 150, flexDirection: 'row', gap: 11, alignItems: 'center' },
   statPillIconBox: { width: 38, height: 38, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   statPillCopy: { flex: 1 },
   statLabel: { fontFamily: 'Inter_500Medium', fontSize: 11, marginBottom: 3 },
@@ -1591,7 +1855,7 @@ export const styles = StyleSheet.create({
   activityAmount: { alignItems: 'flex-end' },
   amountText: { fontFamily: 'Inter_700Bold', fontSize: 13, letterSpacing: -0.2 },
   activityStatusPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginTop: 4 },
-  statusText: { fontFamily: 'Inter_600SemiBold', fontSize: 10, letterSpacing: 0.3 },
+  statusText: { fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.3 },
   modalShade: { flex: 1, justifyContent: 'flex-end' },
   modalShadeDialog: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
   modalCard: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 11, maxHeight: '92%' },
@@ -1610,6 +1874,13 @@ export const styles = StyleSheet.create({
   textInput: { borderWidth: 1, borderRadius: 14, height: 52, paddingHorizontal: 14, fontFamily: 'Inter_400Regular', fontSize: 14 },
   saveError: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 15, marginTop: 8 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 23, alignItems: 'center' },
+  notificationHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  markAllButton: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, minHeight: 44 },
+  markAllText: { fontFamily: 'Inter_600SemiBold', fontSize: 11.5 },
+  notificationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 11, borderBottomWidth: 1, paddingVertical: 13, paddingHorizontal: 8, borderRadius: 12 },
+  notificationTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  unreadDot: { width: 7, height: 7, borderRadius: 4 },
+  notificationMeta: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 5, letterSpacing: 0.2 },
   cancelButton: { height: 49, paddingHorizontal: 17, borderRadius: 14, borderWidth: 1, justifyContent: 'center' },
   cancelText: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
   saveButton: { flex: 1 },
@@ -1620,14 +1891,14 @@ export const styles = StyleSheet.create({
   circleChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center' },
   circleChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   ledgerHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  ledgerClose: { width: 34, height: 34, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  ledgerClose: { width: 44, height: 44, borderRadius: 15, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   // A recessed track with the chosen kind lifted onto the card surface, so the
   // active cell reads as selected without relying on colour alone.
   typeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, padding: 6, borderRadius: 18, marginTop: 20 },
   typeCell: { flexGrow: 1, flexBasis: '47%', minHeight: 50, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   typeLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   ledgerHint: { fontFamily: 'Inter_400Regular', fontSize: 11.5, lineHeight: 17, marginTop: 9 },
-  ledgerLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.4, marginTop: 20, marginBottom: 9 },
+  ledgerLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.4, marginTop: 20, marginBottom: 9 },
   memberField: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 14, minHeight: 52, paddingHorizontal: 14 },
   memberValue: { flex: 1, fontFamily: 'Inter_700Bold', fontSize: 14 },
   memberList: { borderWidth: 1, borderRadius: 14, marginTop: 8 },
@@ -1642,16 +1913,16 @@ export const styles = StyleSheet.create({
   detailNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   detailName: { fontFamily: 'Inter_700Bold', fontSize: 19, letterSpacing: -0.4, flex: 1 },
   adminBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
-  adminBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 8.5, letterSpacing: 0.9 },
+  adminBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 0.9 },
   detailAdminCopy: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16, marginTop: 10 },
   detailStats: { flexDirection: 'row' },
   detailStat: { flex: 1, borderWidth: 1, borderRadius: 15, padding: 13 },
-  detailStatLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.3 },
+  detailStatLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.3 },
   detailStatValue: { fontFamily: 'Inter_700Bold', fontSize: 16, letterSpacing: -0.4, marginTop: 6 },
   detailProgressCopy: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 7 },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1 },
   detailRowNote: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
-  detailRowDate: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 4, lineHeight: 14 },
+  detailRowDate: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4, lineHeight: 14 },
   detailRowAmount: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   detailEmpty: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18, marginTop: 4 },
   detailEmptyTitle: { fontFamily: 'Inter_700Bold', fontSize: 14, marginTop: 9 },
@@ -1670,7 +1941,7 @@ export const styles = StyleSheet.create({
   fineCard: { borderWidth: 1, borderRadius: 16, padding: 14, marginTop: 16, gap: 8 },
   fineHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   fineHeadMain: { flexDirection: 'row', alignItems: 'center', gap: 7, flex: 1 },
-  fineTitle: { fontFamily: 'Inter_700Bold', fontSize: 10.5, letterSpacing: 1.2 },
+  fineTitle: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   fineEditBtn: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 },
   fineEditText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   fineRule: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 },
@@ -1681,25 +1952,25 @@ export const styles = StyleSheet.create({
   fineHint: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16 },
   fineSave: { minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   fineSaveText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-  fineSubhead: { fontFamily: 'Inter_700Bold', fontSize: 9.5, letterSpacing: 1.1, marginTop: 6 },
+  fineSubhead: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.1, marginTop: 6 },
   fineRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
   fineMember: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
-  fineMemberMeta: { fontFamily: 'Inter_400Regular', fontSize: 10.5, marginTop: 2 },
-  fineButton: { borderWidth: 1, borderRadius: 10, minHeight: 38, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
-  fineButtonText: { fontFamily: 'Inter_700Bold', fontSize: 10.5 },
+  fineMemberMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 2 },
+  fineButton: { borderWidth: 1, borderRadius: 11, minHeight: 44, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  fineButtonText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
   fineDonePill: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
-  fineDoneText: { fontFamily: 'Inter_700Bold', fontSize: 10 },
+  fineDoneText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
   // Governance & Members styling
   governanceCard: { borderWidth: 1, borderRadius: 18, padding: 16, marginTop: 16 },
   governanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   governanceTitle: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   capacityPill: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
-  capacityPillText: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 0.6 },
+  capacityPillText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 0.6 },
   governanceGrid: { flexDirection: 'row', gap: 10, marginBottom: 12 },
   govStatItem: { flex: 1, borderWidth: 1, borderRadius: 13, padding: 11 },
-  govStatLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.2 },
+  govStatLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   govStatValue: { fontFamily: 'Inter_700Bold', fontSize: 15, marginTop: 4 },
-  govStatSub: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 3 },
+  govStatSub: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 3 },
   governanceNotice: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 },
   feedbackBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 14 },
   feedbackText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
@@ -1717,17 +1988,26 @@ export const styles = StyleSheet.create({
   membersSection: { marginTop: 22 },
   addMemberBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
   addMemberBtnText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
-  memberRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1 },
+  memberRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1 },
   memberAvatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
   memberAvatarText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   memberMain: { flex: 1 },
   memberName: { fontFamily: 'Inter_600SemiBold', fontSize: 13, maxWidth: 140 },
   roleBadge: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
-  roleBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 8.5, letterSpacing: 0.8 },
-  memberMeta: { fontFamily: 'Inter_400Regular', fontSize: 10.5, marginTop: 4 },
+  roleBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 0.8 },
+  memberMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4 },
   adminActionWrap: { alignItems: 'flex-end', justifyContent: 'center' },
   coAdminToggleBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
   coAdminToggleText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
-  coAdminLimitNotice: { fontFamily: 'Inter_400Regular', fontSize: 10 },
+  coAdminLimitNotice: { fontFamily: 'Inter_400Regular', fontSize: 11 },
   membersEmpty: { fontFamily: 'Inter_400Regular', fontSize: 12.5, lineHeight: 19, paddingHorizontal: 2, paddingVertical: 14 },
+  emptyState: { borderWidth: 1, borderRadius: 18, padding: 22, alignItems: 'center', marginTop: 4 },
+  emptyIcon: { width: 51, height: 51, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontFamily: 'Inter_700Bold', fontSize: 16, marginTop: 12, textAlign: 'center' },
+  emptyBody: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 6, marginBottom: 4, maxWidth: 340 },
+  skeletonRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 16, padding: 14, marginBottom: 10 },
+  skeletonHero: { height: 184, borderRadius: 24, borderWidth: 1, marginVertical: 22 },
+  skeletonIcon: { width: 40, height: 40, borderRadius: 13 },
+  skeletonCopy: { flex: 1 },
+  skeletonLine: { height: 11, borderRadius: 6 },
 });

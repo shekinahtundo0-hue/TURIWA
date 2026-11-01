@@ -259,5 +259,5 @@ const styles = StyleSheet.create({
   fillWrap: { height: 3, borderRadius: 2, overflow: 'hidden' },
   fill: { width: 184, height: 3, borderRadius: 2 },
   status: { fontFamily: 'Inter_500Medium', fontSize: 11, letterSpacing: 1.1, marginTop: 14, textTransform: 'uppercase' },
-  footnote: { position: 'absolute', bottom: 0, alignSelf: 'center', fontSize: 10, letterSpacing: 2.4, textTransform: 'uppercase' },
+  footnote: { position: 'absolute', bottom: 0, alignSelf: 'center', fontSize: 11, letterSpacing: 2.4, textTransform: 'uppercase' },
 });

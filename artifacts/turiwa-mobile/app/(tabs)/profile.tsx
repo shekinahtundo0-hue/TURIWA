@@ -10,7 +10,7 @@ import { useTuriwa } from '@/context/TuriwaContext';
 import { useTheme } from '@/context/ThemeContext';
 import * as api from '@/lib/api';
 
-type Sheet = 'details' | 'security' | 'twofa' | 'help' | 'delete' | null;
+type Sheet = 'details' | 'security' | 'twofa' | 'help' | 'delete' | 'notifications' | null;
 
 const items: { key: Exclude<Sheet, null>; icon: keyof typeof Feather.glyphMap; label: string; detail: string }[] = [
   { key: 'details', icon: 'user', label: 'Personal details', detail: 'Your name and contact information' },
@@ -58,18 +58,38 @@ export default function ProfileScreen() {
           {items.map((item) => <Pressable key={item.label} testID={`menu-${item.key}`} onPress={() => setSheet(item.key)} accessibilityRole="button" style={({ pressed }) => [styles.menuItem, { borderBottomColor: colors.border, opacity: pressed ? 0.65 : 1 }]}><View style={[styles.menuIcon, { backgroundColor: colors.successSoft }]}><Feather name={item.icon} size={17} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={[styles.menuLabel, { color: colors.foreground }]}>{item.label}</Text><Text style={[styles.menuDetail, { color: colors.mutedForeground }]}>{item.detail}</Text></View><Feather name="chevron-right" size={17} color={colors.mutedForeground} /></Pressable>)}
         </View>
         <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>PREFERENCES</Text>
-        <View style={[styles.appearanceRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Pressable
+          testID="menu-notifications"
+          accessibilityRole="button"
+          onPress={() => setSheet('notifications')}
+          style={({ pressed }) => [styles.appearanceRow, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 10, opacity: pressed ? 0.7 : 1 }]}
+        >
+          <View style={[styles.menuIcon, { backgroundColor: colors.successSoft }]}><Feather name="bell" size={17} color={colors.primary} /></View>
+          <View style={{ flex: 1 }}><Text style={[styles.menuLabel, { color: colors.foreground }]}>Notification settings</Text><Text style={[styles.menuDetail, { color: colors.mutedForeground }]}>Contribution, loan, meeting and vote reminders</Text></View>
+          <Feather name="chevron-right" size={17} color={colors.mutedForeground} />
+        </Pressable>
+        <Pressable
+          onPress={() => setPreference(isDark ? 'light' : 'dark')}
+          accessibilityRole="switch"
+          accessibilityState={{ checked: isDark }}
+          accessibilityLabel="Toggle dark mode"
+          style={[styles.appearanceRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+        >
           <View style={[styles.menuIcon, { backgroundColor: colors.successSoft }]}><Feather name={isDark ? 'moon' : 'sun'} size={17} color={colors.primary} /></View>
           <View style={{ flex: 1 }}><Text style={[styles.menuLabel, { color: colors.foreground }]}>{isDark ? 'Dark mode' : 'Light mode'}</Text><Text style={[styles.menuDetail, { color: colors.mutedForeground }]}>Use the theme that feels right for you</Text></View>
-          <Switch
-            accessibilityLabel="Toggle dark mode"
-            value={isDark}
-            onValueChange={(value) => setPreference(value ? 'dark' : 'light')}
-            trackColor={{ false: colors.border, true: colors.success }}
-            thumbColor={colors.card}
-            ios_backgroundColor={colors.border}
-          />
-        </View>
+          {/* The switch box itself is only 20px tall, so the row carries the tap and
+              the control is decorative here — otherwise it would toggle twice. */}
+          <View pointerEvents="none">
+            <Switch
+              accessibilityLabel="Toggle dark mode"
+              value={isDark}
+              onValueChange={(value) => setPreference(value ? 'dark' : 'light')}
+              trackColor={{ false: colors.border, true: colors.success }}
+              thumbColor={colors.card}
+              ios_backgroundColor={colors.border}
+            />
+          </View>
+        </Pressable>
         <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>ABOUT TURIWA</Text>
         <View style={[styles.aboutCard, { backgroundColor: colors.warmSurface, borderColor: colors.goldBorder }]}><Text style={[styles.aboutTitle, { color: colors.foreground }]}>Trust, transparently.</Text><Text style={[styles.aboutCopy, { color: colors.inkSoft }]}>Turiwa helps communities save together with clarity, accountability, and a shared sense of progress.</Text><Text style={[styles.version, { color: colors.mutedForeground }]}>Version 1.0.0</Text></View>
         <Pressable
@@ -82,7 +102,7 @@ export default function ProfileScreen() {
           <View style={[styles.dangerIcon, { backgroundColor: colors.destructiveSoft }]}><Feather name="trash-2" size={17} color={colors.destructive} /></View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.dangerLabel, { color: colors.destructive }]}>Delete account</Text>
-            <Text style={[styles.dangerDetail, { color: colors.mutedForeground }]}>Permanently erase your circles, contributions, loans and sign-in</Text>
+            <Text style={[styles.dangerDetail, { color: colors.mutedForeground }]}>Delete your sign-in. Circle ownership must be transferred first; financial history is retained.</Text>
           </View>
           <Feather name="chevron-right" size={17} color={colors.destructive} />
         </Pressable>
@@ -91,6 +111,7 @@ export default function ProfileScreen() {
       <EditDetailsSheet visible={sheet === 'details'} onClose={() => setSheet(null)} />
       <SecuritySheet visible={sheet === 'security'} onClose={() => setSheet(null)} />
       <TwoFactorSheet visible={sheet === 'twofa'} onClose={() => setSheet(null)} />
+      <NotificationPreferencesSheet visible={sheet === 'notifications'} onClose={() => setSheet(null)} />
       <HelpSheet visible={sheet === 'help'} onClose={() => setSheet(null)} />
       <DeleteAccountSheet
         visible={sheet === 'delete'}
@@ -170,7 +191,7 @@ function EditDetailsSheet({ visible, onClose }: { visible: boolean; onClose: () 
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={[sheet.handle, { marginBottom: 18 }]} />
             <Text style={[uiStyles.modalEyebrow, { color: colors.primary }]}>PERSONAL DETAILS</Text>
             <Text style={[uiStyles.modalTitle, { color: colors.foreground }]}>Your details</Text>
@@ -257,7 +278,7 @@ function SecuritySheet({ visible, onClose }: { visible: boolean; onClose: () => 
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={[sheet.handle, { marginBottom: 18 }]} />
             <Text style={[uiStyles.modalEyebrow, { color: colors.primary }]}>SECURITY & PRIVACY</Text>
             <Text style={[uiStyles.modalTitle, { color: colors.foreground }]}>{needsPassword ? 'Set a password' : 'Change password'}</Text>
@@ -396,7 +417,7 @@ function TwoFactorSheet({ visible, onClose }: { visible: boolean; onClose: () =>
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={[sheet.handle, { marginBottom: 18 }]} />
             <Text style={[uiStyles.modalEyebrow, { color: colors.primary }]}>TWO-FACTOR AUTHENTICATION</Text>
             <Text style={[uiStyles.modalTitle, { color: colors.foreground }]}>
@@ -588,7 +609,7 @@ function DeleteAccountSheet({
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={[sheet.handle, { marginBottom: 18 }]} />
             <Text style={[uiStyles.modalEyebrow, { color: colors.destructive }]}>DELETE ACCOUNT</Text>
             <Text style={[uiStyles.modalTitle, { color: colors.foreground }]}>
@@ -737,6 +758,112 @@ const faqs = [
   { icon: 'lock' as const, question: 'Is my data safe?', answer: 'Your password is hashed, your session expires after 30 days, and every action is tied to your signed-in account.' },
 ];
 
+function NotificationPreferencesSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const colors = useColors();
+  const sheet = useSheet();
+  const { circles, notificationPreferences, saveNotificationPreferences } = useTuriwa();
+  const [scope, setScope] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  React.useEffect(() => {
+    if (visible) {
+      setScope('');
+      setBusy(null);
+      setError('');
+    }
+  }, [visible]);
+  const row = notificationPreferences.find((item) => item.circleId === scope);
+  const values = {
+    contributionReminders: row?.contributionReminders ?? true,
+    loanReminders: row?.loanReminders ?? true,
+    meetingReminders: row?.meetingReminders ?? true,
+    savingsUpdates: row?.savingsUpdates ?? true,
+    voteReminders: row?.voteReminders ?? true,
+  };
+  const options: { key: keyof typeof values; label: string; detail: string }[] = [
+    { key: 'contributionReminders', label: 'Contributions', detail: 'Reminders before a cycle is due, and missed-contribution notices' },
+    { key: 'loanReminders', label: 'Loans', detail: 'Applications, decisions, repayments and overdue loans' },
+    { key: 'meetingReminders', label: 'Meetings', detail: 'New meetings, reschedules and cancellations' },
+    { key: 'savingsUpdates', label: 'Savings goals', detail: 'New goals and progress on the ones you are part of' },
+    { key: 'voteReminders', label: 'Proposals and votes', detail: 'New proposals, deadlines and published results' },
+  ];
+  const toggle = async (key: keyof typeof values, value: boolean) => {
+    setBusy(key);
+    setError('');
+    try {
+      await saveNotificationPreferences({ circleId: scope || undefined, [key]: value });
+      Haptics.selectionAsync();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save that setting.');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const scopeName = scope ? circles.find((circle) => circle.id === scope)?.name ?? 'this circle' : 'All circles';
+  return (
+    <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
+      <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
+        <View style={[sheet.card, { backgroundColor: colors.card }]}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+            <View style={[sheet.handle, { marginBottom: 18 }]} />
+            <Text style={[uiStyles.modalEyebrow, { color: colors.primary }]}>NOTIFICATIONS</Text>
+            <Text style={[uiStyles.modalTitle, { color: colors.foreground }]}>What reaches you</Text>
+            <Text style={[uiStyles.modalHint, { color: colors.mutedForeground }]}>
+              Choose the messages you want. A circle can have its own answer, and the account-wide choice applies to every circle without one.
+              Messages about your own standing — a removal, a role change, a fine — always arrive.
+            </Text>
+            <Text style={[uiStyles.inputLabel, { color: colors.inkSoft }]}>APPLIES TO</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8, paddingBottom: 4 }}>
+              {[{ id: '', name: 'All circles' }, ...circles.map((circle) => ({ id: circle.id, name: circle.name }))].map((item) => {
+                const active = item.id === scope;
+                return (
+                  <Pressable
+                    key={item.id || 'all'}
+                    testID={`notify-scope-${item.id || 'all'}`}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    onPress={() => setScope(item.id)}
+                    style={({ pressed }) => [styles.notifyChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
+                  >
+                    <Text style={[styles.notifyChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{item.name}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={{ marginTop: 12 }}>
+              {options.map((option) => (
+                <View key={option.key} style={[styles.notifyRow, { borderBottomColor: colors.border }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.menuLabel, { color: colors.foreground }]}>{option.label}</Text>
+                    <Text style={[styles.menuDetail, { color: colors.mutedForeground }]}>{option.detail}</Text>
+                  </View>
+                  <Switch
+                    testID={`notify-toggle-${option.key}`}
+                    accessibilityLabel={`${option.label} notifications for ${scopeName}`}
+                    value={values[option.key]}
+                    disabled={busy === option.key}
+                    onValueChange={(value) => void toggle(option.key, value)}
+                    trackColor={{ false: colors.border, true: colors.success }}
+                    thumbColor={colors.card}
+                    ios_backgroundColor={colors.border}
+                  />
+                </View>
+              ))}
+            </View>
+            {error ? <Text style={[uiStyles.saveError, { color: colors.destructive }]} accessibilityLiveRegion="polite">{error}</Text> : null}
+            <Text style={[uiStyles.modalHint, { color: colors.mutedForeground, marginTop: 12 }]}>
+              These settings are saved to your account, so they follow you to any device.
+            </Text>
+            <View style={uiStyles.modalActions}>
+              <View style={{ flex: 1 }}><PrimaryButton label="Done" icon="check" onPress={onClose} /></View>
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function HelpSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const colors = useColors();
   const sheet = useSheet();
@@ -744,7 +871,7 @@ function HelpSheet({ visible, onClose }: { visible: boolean; onClose: () => void
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <ScrollView style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
             <View style={[sheet.handle, { marginBottom: 18 }]} />
             <Text style={[uiStyles.modalEyebrow, { color: colors.primary }]}>HELP CENTRE</Text>
             <Text style={[uiStyles.modalTitle, { color: colors.foreground }]}>How can we help?</Text>
@@ -775,25 +902,28 @@ const styles = StyleSheet.create({
   profileName: { fontFamily: 'Inter_700Bold', fontSize: 16.5, letterSpacing: -0.2 },
   profileMeta: { fontFamily: 'Inter_400Regular', fontSize: 11.5, marginTop: 4 },
   verified: { flexDirection: 'row', gap: 4, alignItems: 'center', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
-  verifiedText: { fontFamily: 'Inter_600SemiBold', fontSize: 10.5, letterSpacing: 0.2 },
-  sectionLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.6, marginTop: 29, marginBottom: 9 },
+  verifiedText: { fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.2 },
+  sectionLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.6, marginTop: 29, marginBottom: 9 },
   menu: { borderWidth: 1, borderRadius: 18, overflow: 'hidden' },
   menuItem: { minHeight: 70, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 12 },
   menuIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   appearanceRow: { borderWidth: 1, borderRadius: 18, minHeight: 70, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 12 },
+  notifyChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center' },
+  notifyChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  notifyRow: { flexDirection: 'row', alignItems: 'center', gap: 14, borderBottomWidth: 1, paddingVertical: 14 },
   menuLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   menuDetail: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4 },
   aboutCard: { borderWidth: 1, borderRadius: 18, padding: 16 },
   aboutTitle: { fontFamily: 'Inter_700Bold', fontSize: 17 },
   aboutCopy: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18, marginTop: 6 },
-  version: { fontFamily: 'Inter_500Medium', fontSize: 10, marginTop: 14 },
-  signOut: { flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', marginTop: 24, padding: 12 },
+  version: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 14 },
+  signOut: { flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', marginTop: 24, padding: 12, minHeight: 44 },
   signOutText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   sheetError: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 8 },
   phoneRow: { borderWidth: 1, borderRadius: 14, minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
   phoneText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 14 },
   phoneBadge: { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 5 },
-  phoneBadgeText: { fontFamily: 'Inter_600SemiBold', fontSize: 10 },
+  phoneBadgeText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   revealToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingVertical: 10 },
   revealText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   privacyNote: { flexDirection: 'row', gap: 9, alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 13, marginTop: 16 },
@@ -831,14 +961,14 @@ const styles = StyleSheet.create({
   outlineDangerButton: { height: 49, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   outlineDangerText: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
   keyCard: { borderWidth: 1, borderRadius: 16, padding: 15, alignItems: 'center' },
-  keyEyebrow: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.5 },
+  keyEyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.5 },
   keyValue: { fontFamily: 'Inter_600SemiBold', fontSize: 15, letterSpacing: 1.6, marginTop: 9, textAlign: 'center', lineHeight: 22 },
   stepList: { marginTop: 16 },
   stepRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', paddingVertical: 6 },
   stepDot: { width: 22, height: 22, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   stepNumber: { fontFamily: 'Inter_700Bold', fontSize: 11 },
   stepText: { flex: 1, fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18 },
-  otpauth: { fontFamily: 'Inter_400Regular', fontSize: 10, lineHeight: 15, marginTop: 14 },
+  otpauth: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 15, marginTop: 14 },
   dataCard: { borderWidth: 1, borderRadius: 18, overflow: 'hidden' },
   dataRow: { minHeight: 62, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 12 },
   noticeCard: { borderWidth: 1, borderRadius: 18, padding: 15, flexDirection: 'row', gap: 11, marginTop: 16 },

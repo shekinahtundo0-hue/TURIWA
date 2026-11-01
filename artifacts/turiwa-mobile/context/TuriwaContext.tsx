@@ -1,10 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '@/lib/api';
 import { LOAN_MONTHS } from '@/lib/loanMath';
-import type { AuthUser, Circle, CircleMember, CircleRole, Contribution, GroupDraft, LedgerEntry, LedgerType, Loan } from '@/lib/api';
+import type { AppNotification, AuthUser, Circle, CircleMember, CircleRole, Contribution, GroupDraft, LedgerEntry, LedgerType, Loan, NotificationPreferencePatch, NotificationPreferenceRow } from '@/lib/api';
 
-export type { AuthUser, Circle, CircleMember, CircleRole, Contribution, GroupDraft, LedgerEntry, LedgerType, Loan };
+export type { AppNotification, AuthUser, Circle, CircleMember, CircleRole, Contribution, GroupDraft, LedgerEntry, LedgerType, Loan, NotificationPreferencePatch, NotificationPreferenceRow };
 
 type StoredAuth = {
   signedIn?: boolean;
@@ -85,6 +85,24 @@ type TuriwaContextValue = {
   contributions: Contribution[];
   loans: Loan[];
   finance: Finance;
+  /** The circle the scoped screens read right now; null when this account has none. */
+  activeCircle: Circle | null;
+  activeCircleId: string;
+  /** This account's role inside `activeCircle` only. Roles do not travel between circles. */
+  activeRole: CircleRole | null;
+  /** The active circle's own ledger figures; null while no circle is active. */
+  activeFinance: Finance | null;
+  /** Unread messages counted per circle, so a list can say where something is waiting. */
+  unreadByCircle: Record<string, number>;
+  /** Make another circle active. Resolves false when this account cannot use it. */
+  setActiveCircle: (circleId: string) => Promise<boolean>;
+  notifications: AppNotification[];
+  unreadCount: number;
+  notificationPreferences: NotificationPreferenceRow[];
+  refreshNotifications: (force?: boolean) => Promise<void>;
+  markNotificationRead: (notificationId: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
+  saveNotificationPreferences: (patch: NotificationPreferencePatch) => Promise<void>;
   authHydrated: boolean;
   signedIn: boolean;
   profileName: string;
@@ -100,11 +118,13 @@ type TuriwaContextValue = {
   deleteCircle: (circleId: string) => Promise<void>;
   setCircleFine: (circleId: string, lateFine: number) => Promise<void>;
   applyFine: (circleId: string, memberId: string) => Promise<void>;
-  applyForLoan: (amount: number, purpose: string, circleId: string, preferredMonths: number) => Promise<void>;
-  repayLoan: (amount: number, loanId?: string) => Promise<void>;
+  applyForLoan: (amount: number, purpose: string, circleId: string, preferredMonths: number, applicationKey?: string) => Promise<void>;
+  repayLoan: (amount: number, loanId?: string, idempotencyKey?: string) => Promise<void>;
   approveLoan: (loanId: string, terms: { amount: number; months: number; interestRate: number }) => Promise<void>;
   rejectLoan: (loanId: string, reason: string) => Promise<void>;
   removeCircleMember: (circleId: string, memberId: string) => Promise<void>;
+  setCircleMemberRole: (circleId: string, memberId: string, role: 'member' | 'co-admin') => Promise<void>;
+  transferPrimaryAdmin: (circleId: string, memberId: string) => Promise<void>;
   signIn: (phone: string, password: string) => Promise<void>;
   signInWithGoogle: (idToken: string) => Promise<void>;
   createAccount: (name: string, phone: string, password: string) => Promise<void>;
@@ -119,10 +139,40 @@ type TuriwaContextValue = {
 
 const AUTH_KEY = '@turiwa/auth';
 
-function cacheKey(userId: string, name: 'circles' | 'contributions' | 'loans') {
+function cacheKey(userId: string, name: 'circles' | 'contributions' | 'loans' | 'active-circle') {
   return `@turiwa/${userId}/${name}`;
 }
 const LEGACY_CACHE_KEYS = ['@turiwa/circles', '@turiwa/contributions', '@turiwa/loans'];
+
+/**
+ * This account's standing inside one circle, or null when it has no standing there.
+ *
+ * Membership is a fact about one circle and nothing else, so it is read from that
+ * circle's own record: the person who opened it, otherwise their row on its roster.
+ * A circle's answer is never carried over to another one, and a roster row that is
+ * pending or removed does not grant a role.
+ */
+export function circleAccess(circle: Circle, userId: string): { role: CircleRole; status: CircleMember['status'] } | null {
+  if (!userId) return null;
+  if (circle.createdBy === userId) return { role: 'admin', status: 'active' };
+  const member = circle.membersList?.find((row) => row.id === userId);
+  if (!member) return null;
+  return { role: member.role ?? 'member', status: member.status ?? 'active' };
+}
+
+/**
+ * Whether this account may decide on a circle's loan requests.
+ *
+ * This is the same reading the API applies to every loan call: the person who opened the
+ * circle, otherwise an active roster row carrying admin or co-admin. Screen buttons are
+ * derived from it so a manager is never shown a review they would be refused, and never
+ * hidden from a decision the group would accept. A role in a request body counts for
+ * nothing here or on the server.
+ */
+export function canManageCircle(circle: Circle, userId: string): boolean {
+  const access = circleAccess(circle, userId);
+  return access !== null && access.status === 'active' && (access.role === 'admin' || access.role === 'co-admin');
+}
 const TuriwaContext = createContext<TuriwaContextValue | null>(null);
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
@@ -222,10 +272,139 @@ function normalizeLoan(loan: Loan): Loan {
   };
 }
 
+// The whole money model in one place: pick the rows, get the figures. Running it over
+// one circle's rows is what keeps that circle's totals from ever being read as another
+// circle's, and running it over every row is the fund view the statement keeps.
+function buildFinance(circles: Circle[], contributions: Contribution[], loans: Loan[]): Finance {
+  const kind = (item: Contribution) => item.type ?? 'Contribution';
+  const total = (items: Contribution[]) => items.reduce((sum, item) => sum + item.amount, 0);
+  const ofKind = (test: (type: api.LedgerType) => boolean) => total(contributions.filter((item) => test(kind(item))));
+  const contributed = ofKind((type) => type === 'Contribution');
+  const repaid = ofKind((type) => type === 'Repayment');
+  const fines = ofKind((type) => type === 'Fine');
+  const outflow = ofKind(api.isOutflow);
+  const setAside = ofKind(api.isSetAside);
+  const paidOut = ofKind(api.isLentOut);
+  // Money in is what the fund received: what members paid, what borrowers gave
+  // back and the fines members handed over. Named kinds only, so a kind added
+  // later cannot quietly count as cash in.
+  const inflow = contributed + repaid + fines;
+  // The fund's cash, read as the sum of the ledger. Nothing else is subtracted:
+  // what borrowers still owe (`outstanding`) is a claim on the future, not money in
+  // the tin now, and the cash a loan handed over is already a row.
+  const netBalance = inflow - outflow - setAside - paidOut;
+  // A loan only stops tying up the fund once it is repaid, so the outstanding
+  // figure covers every group loan still open rather than just the first one.
+  const openLoans = loans.filter((loan) => loan.status === 'Active' || loan.status === 'Pending');
+  // Only money that actually left the fund is owed to it. A request nobody has
+  // approved is a question, not a debt, so it never enters this total.
+  const outstanding = loans
+    .filter((loan) => loan.status === 'Active')
+    .reduce((sum, loan) => sum + loan.balance, 0);
+  const byCircle = new Map<string, number>();
+  for (const item of contributions) {
+    byCircle.set(item.circleId, (byCircle.get(item.circleId) ?? 0) + api.entryDelta(kind(item)) * item.amount);
+  }
+  // A row whose group is not in this account's list is still the account's ledger,
+  // so it stays in the totals and is shown as its own bucket: leaving it out would
+  // break the one identity every screen is built on, that the groups add up to the
+  // fund. It happens when a cache holds a row for a group since deleted.
+  const known = new Set(circles.map((circle) => circle.id));
+  const unassigned = [...byCircle.entries()]
+    .filter(([circleId]) => !known.has(circleId))
+    .reduce((sum, [, value]) => sum + value, 0);
+  // What the ledger says each loan moved. The loan's own balance is one figure and
+  // its rows are another; the loan screen shows both and says when they disagree,
+  // instead of picking one and calling it fact.
+  const paidByLoan = new Map<string, number>();
+  const returnedByLoan = new Map<string, number>();
+  for (const item of contributions) {
+    if (!item.loanId) continue;
+    const bucket = api.isLentOut(kind(item)) ? paidByLoan : returnedByLoan;
+    bucket.set(item.loanId, (bucket.get(item.loanId) ?? 0) + item.amount);
+  }
+  const month = api.currentMonthKey();
+  // The plan is what members agreed to hand in, so the month's answer is its
+  // contribution rows only. An expense or a disbursed loan is money leaving the
+  // fund — a net movement can go negative and still sit under the word "received",
+  // which is how a plan comparison ends up reading "-KES 4,866 received".
+  const contributedIn = (item: Contribution) =>
+    api.monthKey(item) === month && kind(item) === 'Contribution';
+  const contributedThisMonth = contributions
+    .filter(contributedIn)
+    .reduce((sum, item) => sum + item.amount, 0);
+  // The same receipts, split by group, so "is this group on track" is answered with
+  // its own collection rather than the fund's total.
+  const inMonth = new Map<string, number>();
+  for (const item of contributions) {
+    if (!contributedIn(item)) continue;
+    inMonth.set(item.circleId, (inMonth.get(item.circleId) ?? 0) + item.amount);
+  }
+  // A loan's balance and the rows that loan wrote are two accounts of the same money.
+  // They only disagree when one side was written without the other, so the gap is the
+  // figure the treasurer has to check, and the loans with no group are cash no ledger
+  // carries at all.
+  let loanGaps = 0;
+  const overdueLoans: Loan[] = [];
+  const unlinkedLoans: Loan[] = [];
+  // A request nobody has approved has no balance to be late on and no rows to
+  // disagree with, so only a running loan can show up here.
+  for (const loan of loans) {
+    if (loan.status !== 'Active') continue;
+    if (api.isOverdue(loan)) overdueLoans.push(loan);
+    if (!loan.circleId) {
+      unlinkedLoans.push(loan);
+      continue;
+    }
+    loanGaps += Math.abs(api.repaidOnRecord(loan) - (returnedByLoan.get(loan.id) ?? 0));
+  }
+  return {
+    contributed,
+    repaid,
+    fines,
+    inflow,
+    outflow,
+    setAside,
+    paidOut,
+    lentOut: paidOut - repaid,
+    openLoans,
+    outstanding,
+    netBalance,
+    // The most the fund could hand over is the cash it is holding. This is the same
+    // number the API refuses a loan above, so the figure on screen and the rule that
+    // enforces it cannot disagree.
+    lendable: Math.max(netBalance, 0),
+    unassigned,
+    contributedThisMonth,
+    overdueLoans,
+    overdueOwed: overdueLoans.reduce((sum, loan) => sum + loan.balance, 0),
+    unlinkedLoans,
+    loanGaps,
+    plannedThisMonth: circles.reduce((sum, circle) => sum + api.plannedPerMonth(circle), 0),
+    // Only loans that actually took cash earn anything: a request the group has
+    // not decided on is a quote, not money the fund moved.
+    interestEarned: loans
+      .filter((loan) => loan.status === 'Active' || loan.status === 'Paid off')
+      .reduce((sum, loan) => sum + (loan.totalPayable - loan.principal), 0),
+    // Money actually borrowed, so a request nobody has approved is not counted as
+    // cash the member has taken.
+    totalBorrowed: loans
+      .filter((loan) => loan.status === 'Active' || loan.status === 'Paid off')
+      .reduce((sum, loan) => sum + loan.principal, 0),
+    savedFor: (circleId: string) => byCircle.get(circleId) ?? 0,
+    contributedForThisMonth: (circleId: string) => inMonth.get(circleId) ?? 0,
+    returnedFor: (loanId: string) => returnedByLoan.get(loanId) ?? 0,
+  };
+}
+
 export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const [circles, setCircles] = useState<Circle[]>([]);
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [activeCircleId, setActiveCircleId] = useState('');
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferenceRow[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [authHydrated, setAuthHydrated] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
@@ -241,6 +420,53 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
   };
 
+  // The notification list is a second read beside the state, not part of it. Every
+  // state frame would otherwise carry a person's whole inbox, and the reminder pass
+  // that runs on this call needs a moment of its own. Ten seconds is calm enough
+  // that a group's live chatter does not turn into a request per keystroke.
+  const lastNotificationFetch = useRef(0);
+  const refreshNotifications = useCallback(async (force = false) => {
+    if (!api.getAuthToken()) return;
+    const now = Date.now();
+    if (!force && now - lastNotificationFetch.current < 10_000) return;
+    lastNotificationFetch.current = now;
+    try {
+      const centre = await api.fetchNotifications();
+      setNotifications(centre.notifications);
+      setUnreadCount(centre.unreadCount);
+      setNotificationPreferences(centre.preferences);
+    } catch {
+      // The bell keeps its last known list while the API is unreachable; the next
+      // state frame tries again.
+    }
+  }, []);
+
+  const markNotificationRead = async (notificationId: string) => {
+    const target = notifications.find((item) => item.id === notificationId);
+    setNotifications((prev) => prev.map((item) => (item.id === notificationId ? { ...item, read: true } : item)));
+    if (target && !target.read) setUnreadCount((count) => Math.max(count - 1, 0));
+    try {
+      await api.markNotificationRead(notificationId);
+    } catch {
+      // The optimistic mark is undone by the next fetch, which reads the server.
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+    setUnreadCount(0);
+    try {
+      await api.markAllNotificationsRead();
+    } catch {
+      // Nothing to undo locally: the next fetch decides what is actually read.
+    }
+  };
+
+  const saveNotificationPreferences = async (patch: NotificationPreferencePatch) => {
+    await api.saveNotificationPreferences(patch);
+    await refreshNotifications(true);
+  };
+
   const applyState = async (state: api.AppState) => {
     const normalizedCircles = state.circles.map((c) => normalizeCircle(c, user));
     const normalizedLoans = state.loans.map(normalizeLoan);
@@ -250,6 +476,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     setLoans(normalizedLoans);
     setLive(true);
     setLiveError('');
+    void refreshNotifications();
     if (!userId) return;
     await Promise.all([
       AsyncStorage.setItem(cacheKey(userId, 'circles'), JSON.stringify(normalizedCircles)),
@@ -262,15 +489,21 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     setCircles([]);
     setContributions([]);
     setLoans([]);
+    setActiveCircleId('');
+    setNotifications([]);
+    setUnreadCount(0);
+    setNotificationPreferences([]);
     setLive(false);
   };
 
   const loadCache = async (id: string) => {
-    const [storedCircles, storedContributions, storedLoans] = await Promise.all([
+    const [storedCircles, storedContributions, storedLoans, storedActiveCircle] = await Promise.all([
       AsyncStorage.getItem(cacheKey(id, 'circles')),
       AsyncStorage.getItem(cacheKey(id, 'contributions')),
       AsyncStorage.getItem(cacheKey(id, 'loans')),
+      AsyncStorage.getItem(cacheKey(id, 'active-circle')),
     ]);
+    if (storedActiveCircle) setActiveCircleId(storedActiveCircle);
     if (storedCircles) {
       setCircles(
         (JSON.parse(storedCircles) as (Partial<Circle> & { monthly?: number })[]).map((c) =>
@@ -358,7 +591,10 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     // made-up name.
     const member = entry?.member ?? user?.name?.trim() ?? 'You';
     const payload: LedgerEntry = entry ? { ...entry, member } : { type: 'Contribution', member };
-    await applyState(await api.addContribution(amount, note, circleId ?? circles[0]?.id, payload));
+    // With no group named on the sheet the money goes to the circle the person is
+    // working in, not to whichever the list happens to start with: the first circle is
+    // not the one on screen after a switch.
+    await applyState(await api.addContribution(amount, note, circleId ?? activeCircle?.id ?? circles[0]?.id, payload));
   };
 
   const createCircle = async (draft: GroupDraft) => {
@@ -386,14 +622,15 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await applyState(await api.applyFine(circleId, memberId));
   };
 
-  const applyForLoan = async (amount: number, purpose: string, circleId: string, preferredMonths: number) => {
-    await applyState(await api.applyForLoan(amount, purpose, circleId, preferredMonths));
+  const applyForLoan = async (amount: number, purpose: string, circleId: string, preferredMonths: number, applicationKey?: string) => {
+    await applyState(await api.applyForLoan(amount, purpose, circleId, preferredMonths, applicationKey));
   };
 
-  const repayLoan = async (amount: number, loanId?: string) => {
-    const target = loans.find((loan) => loan.id === loanId) ?? loans.find((loan) => loan.status === 'Active' || loan.status === 'Pending');
-    if (!target) return;
-    await applyState(await api.repayLoan(target.id, amount));
+  const repayLoan = async (amount: number, loanId?: string, idempotencyKey?: string) => {
+    if (!loanId) throw new Error('Choose the loan you are repaying and try again.');
+    const target = loans.find((loan) => loan.id === loanId);
+    if (!target || target.status !== 'Active') throw new Error('This loan is no longer active. Refresh the loan list and try again.');
+    await applyState(await api.repayLoan(target.id, amount, idempotencyKey));
   };
 
   // Administrator approval of pending loans. The server's answer is the state: a
@@ -410,6 +647,14 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await applyState(await api.removeCircleMember(circleId, memberId));
   };
 
+  const setCircleMemberRole = async (circleId: string, memberId: string, role: 'member' | 'co-admin') => {
+    await applyState(await api.setCircleMemberRole(circleId, memberId, role));
+  };
+
+  const transferPrimaryAdmin = async (circleId: string, memberId: string) => {
+    await applyState(await api.transferPrimaryAdmin(circleId, memberId));
+  };
+
   const openSession = async (session: api.AuthSession) => {
     api.setAuthToken(session.token);
     clearData();
@@ -417,6 +662,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     setSignedIn(true);
     await persistAuth({ signedIn: true, token: session.token, user: session.user });
     await loadCache(session.user.id);
+    void refreshNotifications(true);
   };
 
   const signIn = async (phone: string, password: string) => {
@@ -476,7 +722,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await persistAuth({ signedIn: false });
     if (deletedUserId) {
       await Promise.all(
-        (['circles', 'contributions', 'loans'] as const).map((name) =>
+        (['circles', 'contributions', 'loans', 'active-circle'] as const).map((name) =>
           AsyncStorage.removeItem(cacheKey(deletedUserId, name)),
         ),
       );
@@ -495,127 +741,63 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const finance = useMemo<Finance>(() => {
-    const kind = (item: Contribution) => item.type ?? 'Contribution';
-    const total = (items: Contribution[]) => items.reduce((sum, item) => sum + item.amount, 0);
-    const ofKind = (test: (type: api.LedgerType) => boolean) => total(contributions.filter((item) => test(kind(item))));
-    const contributed = ofKind((type) => type === 'Contribution');
-    const repaid = ofKind((type) => type === 'Repayment');
-    const fines = ofKind((type) => type === 'Fine');
-    const outflow = ofKind(api.isOutflow);
-    const setAside = ofKind(api.isSetAside);
-    const paidOut = ofKind(api.isLentOut);
-    // Money in is what the fund received: what members paid, what borrowers gave
-    // back and the fines members handed over. Named kinds only, so a kind added
-    // later cannot quietly count as cash in.
-    const inflow = contributed + repaid + fines;
-    // The fund's cash, read as the sum of the ledger. Nothing else is subtracted:
-    // what borrowers still owe (`outstanding`) is a claim on the future, not money in
-    // the tin now, and the cash a loan handed over is already a row.
-    const netBalance = inflow - outflow - setAside - paidOut;
-    // A loan only stops tying up the fund once it is repaid, so the outstanding
-    // figure covers every group loan still open rather than just the first one.
-    const openLoans = loans.filter((loan) => loan.status === 'Active' || loan.status === 'Pending');
-    // Only money that actually left the fund is owed to it. A request nobody has
-    // approved is a question, not a debt, so it never enters this total.
-    const outstanding = loans
-      .filter((loan) => loan.status === 'Active')
-      .reduce((sum, loan) => sum + loan.balance, 0);
-    const byCircle = new Map<string, number>();
-    for (const item of contributions) {
-      byCircle.set(item.circleId, (byCircle.get(item.circleId) ?? 0) + api.entryDelta(kind(item)) * item.amount);
+  const activeCircle = useMemo(
+    () => circles.find((circle) => circle.id === activeCircleId) ?? null,
+    [circles, activeCircleId],
+  );
+  const activeRole = useMemo(
+    () => (activeCircle ? circleAccess(activeCircle, userId)?.role ?? null : null),
+    [activeCircle, userId],
+  );
+
+  // Switching is a client-side move between circles this account already has, so the
+  // list the API returned is the only thing that can be pointed at. An id typed into a
+  // URL, the console or a request body selects nothing here — and the API scopes every
+  // read to the caller's own memberships regardless.
+  const setActiveCircle = async (circleId: string) => {
+    const target = circles.find((circle) => circle.id === circleId);
+    const access = target ? circleAccess(target, userId) : null;
+    if (!target || !access || access.status !== 'active') return false;
+    setActiveCircleId(circleId);
+    if (userId) await AsyncStorage.setItem(cacheKey(userId, 'active-circle'), circleId);
+    return true;
+  };
+
+  // The stored choice of circle is a hint about where the person was last working,
+  // never an authorisation. Every frame of the account's circles is checked against
+  // it, so a group that was deleted, or one whose membership has since gone, cannot
+  // stay the active one: the app moves to another circle the API still returns.
+  useEffect(() => {
+    if (!userId) return;
+    if (circles.some((circle) => circle.id === activeCircleId)) return;
+    const next = circles[0]?.id ?? '';
+    if (next !== activeCircleId) setActiveCircleId(next);
+    if (next) void AsyncStorage.setItem(cacheKey(userId, 'active-circle'), next);
+  }, [circles, userId, activeCircleId]);
+
+  const finance = useMemo(() => buildFinance(circles, contributions, loans), [circles, contributions, loans]);
+
+  // One circle's own books. The scope selects which ledger rows are summed, so the
+  // figures cannot be the previous circle's numbers wearing the new circle's name:
+  // switching id changes the rows, not just the label beside them.
+  const activeFinance = useMemo(() => {
+    if (!activeCircle) return null;
+    const id = activeCircle.id;
+    return buildFinance(
+      [activeCircle],
+      contributions.filter((row) => row.circleId === id),
+      loans.filter((loan) => loan.circleId === id),
+    );
+  }, [activeCircle, contributions, loans]);
+
+  const unreadByCircle = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const item of notifications) {
+      if (item.read || !item.circleId) continue;
+      counts[item.circleId] = (counts[item.circleId] ?? 0) + 1;
     }
-    // A row whose group is not in this account's list is still the account's ledger,
-    // so it stays in the totals and is shown as its own bucket: leaving it out would
-    // break the one identity every screen is built on, that the groups add up to the
-    // fund. It happens when a cache holds a row for a group since deleted.
-    const known = new Set(circles.map((circle) => circle.id));
-    const unassigned = [...byCircle.entries()]
-      .filter(([circleId]) => !known.has(circleId))
-      .reduce((sum, [, value]) => sum + value, 0);
-    // What the ledger says each loan moved. The loan's own balance is one figure and
-    // its rows are another; the loan screen shows both and says when they disagree,
-    // instead of picking one and calling it fact.
-    const paidByLoan = new Map<string, number>();
-    const returnedByLoan = new Map<string, number>();
-    for (const item of contributions) {
-      if (!item.loanId) continue;
-      const bucket = api.isLentOut(kind(item)) ? paidByLoan : returnedByLoan;
-      bucket.set(item.loanId, (bucket.get(item.loanId) ?? 0) + item.amount);
-    }
-    const month = api.currentMonthKey();
-    // The plan is what members agreed to hand in, so the month's answer is its
-    // contribution rows only. An expense or a disbursed loan is money leaving the
-    // fund — a net movement can go negative and still sit under the word "received",
-    // which is how a plan comparison ends up reading "-KES 4,866 received".
-    const contributedIn = (item: Contribution) =>
-      api.monthKey(item) === month && kind(item) === 'Contribution';
-    const contributedThisMonth = contributions
-      .filter(contributedIn)
-      .reduce((sum, item) => sum + item.amount, 0);
-    // The same receipts, split by group, so "is this group on track" is answered with
-    // its own collection rather than the fund's total.
-    const inMonth = new Map<string, number>();
-    for (const item of contributions) {
-      if (!contributedIn(item)) continue;
-      inMonth.set(item.circleId, (inMonth.get(item.circleId) ?? 0) + item.amount);
-    }
-    // A loan's balance and the rows that loan wrote are two accounts of the same money.
-    // They only disagree when one side was written without the other, so the gap is the
-    // figure the treasurer has to check, and the loans with no group are cash no ledger
-    // carries at all.
-    let loanGaps = 0;
-    const overdueLoans: Loan[] = [];
-    const unlinkedLoans: Loan[] = [];
-    // A request nobody has approved has no balance to be late on and no rows to
-    // disagree with, so only a running loan can show up here.
-    for (const loan of loans) {
-      if (loan.status !== 'Active') continue;
-      if (api.isOverdue(loan)) overdueLoans.push(loan);
-      if (!loan.circleId) {
-        unlinkedLoans.push(loan);
-        continue;
-      }
-      loanGaps += Math.abs(api.repaidOnRecord(loan) - (returnedByLoan.get(loan.id) ?? 0));
-    }
-    return {
-      contributed,
-      repaid,
-      fines,
-      inflow,
-      outflow,
-      setAside,
-      paidOut,
-      lentOut: paidOut - repaid,
-      openLoans,
-      outstanding,
-      netBalance,
-      // The most the fund could hand over is the cash it is holding. This is the same
-      // number the API refuses a loan above, so the figure on screen and the rule that
-      // enforces it cannot disagree.
-      lendable: Math.max(netBalance, 0),
-      unassigned,
-      contributedThisMonth,
-      overdueLoans,
-      overdueOwed: overdueLoans.reduce((sum, loan) => sum + loan.balance, 0),
-      unlinkedLoans,
-      loanGaps,
-      plannedThisMonth: circles.reduce((sum, circle) => sum + api.plannedPerMonth(circle), 0),
-      // Only loans that actually took cash earn anything: a request the group has
-      // not decided on is a quote, not money the fund moved.
-      interestEarned: loans
-        .filter((loan) => loan.status === 'Active' || loan.status === 'Paid off')
-        .reduce((sum, loan) => sum + (loan.totalPayable - loan.principal), 0),
-      // Money actually borrowed, so a request nobody has approved is not counted as
-      // cash the member has taken.
-      totalBorrowed: loans
-        .filter((loan) => loan.status === 'Active' || loan.status === 'Paid off')
-        .reduce((sum, loan) => sum + loan.principal, 0),
-      savedFor: (circleId: string) => byCircle.get(circleId) ?? 0,
-      contributedForThisMonth: (circleId: string) => inMonth.get(circleId) ?? 0,
-      returnedFor: (loanId: string) => returnedByLoan.get(loanId) ?? 0,
-    };
-  }, [circles, contributions, loans]);
+    return counts;
+  }, [notifications]);
 
   const value = useMemo(
     () => ({
@@ -623,6 +805,19 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       contributions,
       loans,
       finance,
+      activeCircle,
+      activeCircleId,
+      activeRole,
+      activeFinance,
+      unreadByCircle,
+      setActiveCircle,
+      notifications,
+      unreadCount,
+      notificationPreferences,
+      refreshNotifications,
+      markNotificationRead,
+      markAllNotificationsRead,
+      saveNotificationPreferences,
       authHydrated,
       signedIn,
       profileName,
@@ -642,6 +837,8 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       approveLoan,
       rejectLoan,
       removeCircleMember,
+      setCircleMemberRole,
+      transferPrimaryAdmin,
       signIn,
       signInWithGoogle,
       createAccount,
@@ -658,6 +855,14 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       contributions,
       loans,
       finance,
+      activeCircle,
+      activeCircleId,
+      activeRole,
+      activeFinance,
+      unreadByCircle,
+      notifications,
+      unreadCount,
+      notificationPreferences,
       authHydrated,
       signedIn,
       profileName,

@@ -2,6 +2,8 @@ export * from "./users";
 export * from "./circles";
 export * from "./contributions";
 export * from "./loans";
+export * from "./notifications";
+export * from "./engagement";
 export * from "./meta";
 export * from "./sessions";
 export * from "./authCodes";

@@ -1,12 +1,12 @@
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useTuriwa } from '@/context/TuriwaContext';
-import { ActivityRow, BrandHeader, HeaderIconButton, RecordTransactionModal, Screen, SectionHeading } from '@/components/TuriwaUI';
+import { ActivityRow, BrandHeader, HeaderIconButton, RecordTransactionModal, Screen, ScreenSkeleton, SectionHeading } from '@/components/TuriwaUI';
 import { entryDelta, isLentOut, isOutflow, isSetAside, type Contribution } from '@/lib/api';
 import { csvFileName, ledgerCsv, saveCsv } from '@/lib/statement';
 
@@ -16,9 +16,15 @@ export default function ActivityScreen() {
   const colors = useColors();
   const layout = useResponsive();
   const insets = useSafeAreaInsets();
-  const { contributions, circles, addContribution, refresh, refreshing } = useTuriwa();
+  const { contributions, circles, activeCircleId, addContribution, refresh, refreshing, hydrated } = useTuriwa();
   const [filter, setFilter] = useState<'All' | 'Complete' | 'Pending'>('All');
   const [circleFilter, setCircleFilter] = useState<'All' | string>('All');
+  // The list follows the circle the person is working in. Leaving a stale filter on the
+  // previous circle would keep another group's rows — and the totals built from them —
+  // on screen after a switch.
+  useEffect(() => {
+    if (activeCircleId) setCircleFilter(activeCircleId);
+  }, [activeCircleId]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [recordOpen, setRecordOpen] = useState(false);
@@ -79,6 +85,14 @@ export default function ActivityScreen() {
     ]);
     saveCsv(csvFileName('turiwa-activity'), csv);
   };
+
+  if (!hydrated) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <Screen><ScreenSkeleton rows={6} /></Screen>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
@@ -251,23 +265,25 @@ function SummaryCard({ testID, tone, icon, label, value, caption }: { testID: st
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  summaryRow: { flexDirection: 'row', gap: 10 },
-  summaryCard: { flex: 1, borderRadius: 18, borderWidth: 1, padding: 13 },
+  // A figure that breaks mid-number reads as a different amount, so the cards drop to
+  // two across rather than shrinking below the width "KES 14,900" needs on one line.
+  summaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  summaryCard: { flex: 1, minWidth: 132, borderRadius: 18, borderWidth: 1, padding: 13 },
   summaryHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   summaryIconBox: { width: 22, height: 22, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
-  summaryLabel: { fontFamily: 'Inter_700Bold', fontSize: 9.5, letterSpacing: 1.1, flexShrink: 1 },
+  summaryLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.1, flexShrink: 1 },
   summaryCardPhone: { padding: 12 },
   summaryValue: { fontFamily: 'Inter_700Bold', fontSize: 21, letterSpacing: -0.7 },
   summaryValuePhone: { fontSize: 15.5, letterSpacing: -0.4 },
   // The currency sits smaller than the figure so three cards still fit side by
   // side on a phone without the amount breaking onto a second line.
-  summaryCurrency: { fontFamily: 'Inter_600SemiBold', fontSize: 10.5, letterSpacing: 0.4 },
-  summaryCaption: { fontFamily: 'Inter_500Medium', fontSize: 10.5, marginTop: 6, opacity: 0.85 },
+  summaryCurrency: { fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.4 },
+  summaryCaption: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 6, opacity: 0.85 },
   outBreakdown: { fontFamily: 'Inter_500Medium', fontSize: 11, lineHeight: 17, marginTop: 10 },
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 14, paddingHorizontal: 13, minHeight: 46, marginTop: 18 },
   searchInput: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 14, paddingVertical: 8 },
   filters: { borderRadius: 13, padding: 4, flexDirection: 'row', marginBottom: 7 },
-  filterLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.4, marginTop: 16, marginBottom: 8 },
+  filterLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.4, marginTop: 16, marginBottom: 8 },
   circleFilters: { gap: 8, paddingRight: 8 },
   circleFilter: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center' },
   circleFilterText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
@@ -279,7 +295,7 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 62, height: 62, borderRadius: 31, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontFamily: 'Inter_700Bold', fontSize: 16, marginTop: 14 },
   emptyCopy: { fontFamily: 'Inter_500Medium', fontSize: 12, marginTop: 5 },
-  clearFilters: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 40, marginTop: 16 },
+  clearFilters: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, marginTop: 16 },
   clearFiltersText: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
   footnote: { flexDirection: 'row', gap: 9, alignItems: 'center', padding: 13, borderRadius: 13, marginTop: 23 },
   footnoteText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },

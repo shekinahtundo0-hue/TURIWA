@@ -1,7 +1,7 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type DimensionValue } from 'react-native';
 import { useColors } from '@/hooks/useColors';
@@ -17,14 +17,16 @@ import {
   BrandHeader,
   CircleCard,
   CircleDetailModal,
+  CircleScopeToggle,
   NotificationsModal,
-  notificationItems,
   PrimaryButton,
   RecordTransactionModal,
   Screen,
+  ScreenSkeleton,
   SectionHeading,
   StatPill,
 } from '@/components/TuriwaUI';
+import { CircleSwitcher } from '@/components/CircleSwitcher';
 
 // The greeting follows the clock instead of greeting everyone at breakfast.
 function greetingFor(date: Date): string {
@@ -40,12 +42,23 @@ export default function HomeScreen() {
   const layout = useResponsive();
   const wide = layout.isDesktop;
   const router = useRouter();
-  const { circles, contributions, addContribution, loans, finance, user, hydrated, profileName, live, liveError, refresh, refreshing, setCircleFine, applyFine, removeCircleMember } = useTuriwa();
+  const { circles, contributions, addContribution, loans, finance, activeCircle, activeFinance, user, hydrated, profileName, live, liveError, refresh, refreshing, setCircleFine, applyFine, removeCircleMember, setCircleMemberRole, transferPrimaryAdmin, notifications, unreadCount, markNotificationRead, markAllNotificationsRead } = useTuriwa();
   const [modalVisible, setModalVisible] = useState(false);
   const [contributionCircleId, setContributionCircleId] = useState<string | undefined>(undefined);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [detailCircle, setDetailCircle] = useState<Circle | null>(null);
   const [showAll, setShowAll] = useState(false);
+  // Which set of books this screen is reading. The active circle's own figures are the
+  // default because that is the circle the person chose to work in; the whole fund is
+  // still one tap away, and the hero names whichever of the two is on screen, so a
+  // number is never shown under the wrong owner.
+  const [scopeAll, setScopeAll] = useState(false);
+  const scoped = scopeAll ? null : activeCircle;
+  const view = scoped ? (activeFinance ?? finance) : finance;
+  const ledgerRows = useMemo(
+    () => (scoped ? contributions.filter((row) => row.circleId === scoped.id) : contributions),
+    [contributions, scoped],
+  );
   const [ledgerType, setLedgerType] = useState<LedgerType>('Contribution');
   // One sheet records every kind of ledger entry; the entry point picks the kind.
   const openLedger = (type: LedgerType = 'Contribution') => {
@@ -55,9 +68,8 @@ export default function HomeScreen() {
   };
   const savedFor = finance.savedFor;
   const isAdmin = (circle: Circle) => Boolean(user?.id) && circle.createdBy === user?.id;
-  const requests = loans.filter((loan) => loan.status === 'Pending');
-  // Same derivation as the sheet the bell opens: the badge is that list's length.
-  const notifications = useMemo(() => notificationItems(contributions, loans, circles), [contributions, loans, circles]);
+  const inScope = (loan: { circleId: string | null }) => !scoped || loan.circleId === scoped.id;
+  const requests = loans.filter((loan) => loan.status === 'Pending' && inScope(loan));
   // On track is this month's own question: what the group agreed to take in a month,
   // against what its own members have handed in this one. A group's saved total, or the
   // fund's net movement, says nothing about either.
@@ -66,24 +78,26 @@ export default function HomeScreen() {
     return planned > 0 && finance.contributedForThisMonth(circle.id) >= planned;
   }).length;
   // Money the fund has actually handed over and not seen back: a request is not a loan.
-  const runningLoans = loans.filter((loan) => loan.status === 'Active');
-  const monthStatement = useMemo(() => buildStatement(contributions, api.currentMonthKey()), [contributions]);
+  const runningLoans = loans.filter((loan) => loan.status === 'Active' && inScope(loan));
+  const monthStatement = useMemo(() => buildStatement(ledgerRows, api.currentMonthKey()), [ledgerRows]);
   const summary = useMemo(
     () =>
       monthlySummary(monthStatement, {
-        planned: finance.plannedThisMonth,
-        overdue: finance.overdueLoans,
+        planned: view.plannedThisMonth,
+        overdue: view.overdueLoans,
         requests,
-        unlinked: finance.unlinkedLoans,
-        gaps: finance.loanGaps,
-        unassigned: finance.unassigned,
+        unlinked: view.unlinkedLoans,
+        gaps: view.loanGaps,
+        unassigned: view.unassigned,
       }),
-    [monthStatement, finance, loans],
+    [monthStatement, view, requests],
   );
   if (!hydrated) {
     return (
-      <View style={[styles.loading, { backgroundColor: colors.background }]}>
-        <MaterialCommunityIcons name="loading" size={32} color={colors.primary} />
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <Screen>
+          <ScreenSkeleton rows={4} />
+        </Screen>
       </View>
     );
   }
@@ -101,9 +115,13 @@ export default function HomeScreen() {
                 : 'Connecting to your Turiwa database…'
           }
           onNotification={() => setNotificationsVisible(true)}
-          notificationCount={notifications.length}
+          notificationCount={unreadCount}
+          actions={<CircleSwitcher />}
         />
         <View style={[styles.overview, wide && styles.overviewWide]}>
+          {circles.length > 1 ? (
+            <CircleScopeToggle circleName={activeCircle?.name ?? null} scopeAll={scopeAll} onChange={setScopeAll} />
+          ) : null}
           <View style={[styles.heroWrap, wide && styles.heroWrapWide]}>
             <LinearGradient
               colors={isDark ? ['#051811', '#0B2D21'] : ['#022E20', '#04432F']}
@@ -115,7 +133,7 @@ export default function HomeScreen() {
               <View style={[styles.heroOrbInner, { borderColor: colors.heroBorder }]} />
               <View style={styles.heroTopRow}>
                 <Text style={[styles.heroEyebrow, { color: colors.heroMuted }]}>
-                  CASH HELD BY THE FUND
+                  {scoped ? 'CASH HELD IN THIS CIRCLE' : 'CASH HELD BY THE FUND'}
                 </Text>
                 <View style={[styles.trustBadge, { backgroundColor: colors.heroChip, borderColor: colors.heroBorder }]}>
                   <Feather name="shield" size={13} color={colors.heroForeground} />
@@ -124,16 +142,16 @@ export default function HomeScreen() {
                   </Text>
                 </View>
               </View>
-              <Amount testID="home-cash-held" value={finance.netBalance} size={wide ? 38 : 34} color={colors.heroForeground} />
+              <Amount testID="home-cash-held" value={view.netBalance} size={wide ? 38 : 34} color={colors.heroForeground} />
               <View style={styles.heroFooter}>
                 <View style={styles.heroMonthWrap}>
                   <Text style={[styles.heroMeta, { color: colors.heroMuted }]}>
                     This month, against the plan
                   </Text>
                   <Text testID="home-month-pace" style={[styles.heroMonth, { color: colors.heroForeground }]}>
-                    {finance.plannedThisMonth > 0
-                      ? `${api.kesLabel(finance.contributedThisMonth)} in contributions of ${api.kesLabel(finance.plannedThisMonth)} agreed`
-                      : `${api.kesLabel(finance.contributedThisMonth)} in contributions · no monthly plan set yet`}
+                    {view.plannedThisMonth > 0
+                      ? `${api.kesLabel(view.contributedThisMonth)} in contributions of ${api.kesLabel(view.plannedThisMonth)} agreed`
+                      : `${api.kesLabel(view.contributedThisMonth)} in contributions · no monthly plan set yet`}
                   </Text>
                 </View>
                 <Pressable
@@ -165,18 +183,18 @@ export default function HomeScreen() {
             the parts, so no figure on this screen is one nobody can trace to a row. */}
         <SectionHeading title="Where the money is" />
         <View testID="home-bridge" style={[styles.bridge, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <BridgeRow label="Contributions paid in" value={finance.contributed} />
-          <BridgeRow label="Loan money paid back" value={finance.repaid} />
-          <BridgeRow label="Spent by the group" value={-finance.outflow} />
-          <BridgeRow label="Set aside as welfare" value={-finance.setAside} hint="Held, not spent" />
-          <BridgeRow label="Handed over as loans" value={-finance.paidOut} hint="Back as repayments" />
+          <BridgeRow label="Contributions paid in" value={view.contributed} />
+          <BridgeRow label="Loan money paid back" value={view.repaid} />
+          <BridgeRow label="Spent by the group" value={-view.outflow} />
+          <BridgeRow label="Set aside as welfare" value={-view.setAside} hint="Held, not spent" />
+          <BridgeRow label="Handed over as loans" value={-view.paidOut} hint="Back as repayments" />
           <View style={[styles.bridgeTotal, { borderTopColor: colors.border }]}>
-            <Text style={[styles.bridgeTotalLabel, { color: colors.mutedForeground }]}>Cash the fund can use</Text>
-            <Text style={[styles.bridgeTotalValue, { color: colors.foreground }]}>{api.kesLabel(finance.netBalance)}</Text>
+            <Text style={[styles.bridgeTotalLabel, { color: colors.mutedForeground }]}>{scoped ? 'Cash this circle can use' : 'Cash the fund can use'}</Text>
+            <Text style={[styles.bridgeTotalValue, { color: colors.foreground }]}>{api.kesLabel(view.netBalance)}</Text>
           </View>
-          {finance.unassigned !== 0 ? (
+          {view.unassigned !== 0 ? (
             <Text style={[styles.bridgeNote, { color: colors.accentForeground }]}>
-              {api.kesLabel(Math.abs(finance.unassigned))} of these entries belong to a group this account cannot open.
+              {api.kesLabel(Math.abs(view.unassigned))} of these entries belong to a group this account cannot open.
             </Text>
           ) : null}
         </View>
@@ -184,15 +202,19 @@ export default function HomeScreen() {
           <MoneyFact
             testID="home-owed"
             label="OWED TO THE GROUP"
-            value={finance.outstanding}
+            value={view.outstanding}
             caption={runningLoans.length > 0 ? `${runningLoans.length} running loan${runningLoans.length === 1 ? '' : 's'}, interest included` : 'Nothing borrowed yet'}
             onPress={() => router.push('/loans')}
           />
           <MoneyFact
             testID="home-lendable"
             label="READY TO LEND"
-            value={finance.lendable}
-            caption="The cash the fund holds — the same ceiling a loan is refused above"
+            value={view.lendable}
+            caption={
+              scoped
+                ? 'The cash this circle holds — the ceiling a loan into it is refused above'
+                : 'The cash every circle holds together'
+            }
             onPress={() => router.push('/loans')}
           />
         </View>
@@ -202,9 +224,9 @@ export default function HomeScreen() {
           <AttentionRow
             testID="attention-overdue"
             icon="alert-triangle"
-            warn={finance.overdueLoans.length > 0}
-            label={finance.overdueLoans.length > 0 ? `${finance.overdueLoans.length} loan${finance.overdueLoans.length === 1 ? '' : 's'} past their due date` : 'No loan is past its due date'}
-            detail={finance.overdueLoans.length > 0 ? `${api.kesLabel(finance.overdueOwed)} still owing on them` : `${runningLoans.length} running loan${runningLoans.length === 1 ? '' : 's'} on schedule`}
+            warn={view.overdueLoans.length > 0}
+            label={view.overdueLoans.length > 0 ? `${view.overdueLoans.length} loan${view.overdueLoans.length === 1 ? '' : 's'} past their due date` : 'No loan is past its due date'}
+            detail={view.overdueLoans.length > 0 ? `${api.kesLabel(view.overdueOwed)} still owing on them` : `${runningLoans.length} running loan${runningLoans.length === 1 ? '' : 's'} on schedule`}
             onPress={() => router.push('/loans')}
           />
           <AttentionRow
@@ -218,15 +240,17 @@ export default function HomeScreen() {
           <AttentionRow
             testID="attention-arrears"
             icon="clock"
-            warn={finance.plannedThisMonth > finance.contributedThisMonth}
+            warn={view.plannedThisMonth > view.contributedThisMonth}
             label={
-              finance.plannedThisMonth > finance.contributedThisMonth
-                ? `${api.kesLabel(finance.plannedThisMonth - finance.contributedThisMonth)} of this month's plan has not arrived`
+              view.plannedThisMonth > view.contributedThisMonth
+                ? `${api.kesLabel(view.plannedThisMonth - view.contributedThisMonth)} of this month's plan has not arrived`
                 : 'This month has met the agreed plan'
             }
             detail={
-              finance.plannedThisMonth > 0
-                ? `The groups agreed to take ${api.kesLabel(finance.plannedThisMonth)} in the month; members have handed in ${api.kesLabel(finance.contributedThisMonth)}`
+              view.plannedThisMonth > 0
+                ? scoped
+                  ? `This circle agreed to take ${api.kesLabel(view.plannedThisMonth)} in the month; its members have handed in ${api.kesLabel(view.contributedThisMonth)}`
+                  : `The groups agreed to take ${api.kesLabel(view.plannedThisMonth)} in the month; members have handed in ${api.kesLabel(view.contributedThisMonth)}`
                 : 'Set a contribution and headcount in a group to get a monthly plan'
             }
             onPress={() => router.push('/activity')}
@@ -234,18 +258,20 @@ export default function HomeScreen() {
           <AttentionRow
             testID="attention-reconciliation"
             icon="target"
-            warn={finance.unlinkedLoans.length > 0 || finance.loanGaps > 0}
+            warn={view.unlinkedLoans.length > 0 || view.loanGaps > 0}
             label={
-              finance.unlinkedLoans.length > 0
-                ? `${finance.unlinkedLoans.length} loan${finance.unlinkedLoans.length === 1 ? '' : 's'} have no group on record`
-                : finance.loanGaps > 0
-                  ? `${api.kesLabel(finance.loanGaps)} where a loan and its rows disagree`
+              view.unlinkedLoans.length > 0
+                ? `${view.unlinkedLoans.length} loan${view.unlinkedLoans.length === 1 ? '' : 's'} have no group on record`
+                : view.loanGaps > 0
+                  ? `${api.kesLabel(view.loanGaps)} where a loan and its rows disagree`
                   : 'The loan book and the ledger agree'
             }
             detail={
-              finance.unlinkedLoans.length > 0
+              view.unlinkedLoans.length > 0
                 ? 'Their cash is in the fund total but in no group split'
-                : 'Each group adds up to the fund, and each loan to its repayments'
+                : scoped
+                  ? "This circle's loans add up to its own ledger rows"
+                  : 'Each group adds up to the fund, and each loan to its repayments'
             }
             onPress={() => router.push('/statement')}
           />
@@ -269,11 +295,15 @@ export default function HomeScreen() {
 
         <SectionHeading title="Turiwa services" />
         <View style={styles.serviceGrid}>
-          <ServiceTile width={layout.tileWidth} icon="credit-card" label="Loans" detail={finance.lendable > 0 ? `${api.kesLabel(finance.lendable)} ready to lend` : 'No cash to lend right now'} onPress={() => router.push('/loans')} />
+          <ServiceTile width={layout.tileWidth} icon="credit-card" label="Loans" detail={view.lendable > 0 ? `${api.kesLabel(view.lendable)} ready to lend` : 'No cash to lend right now'} onPress={() => router.push('/loans')} />
           <ServiceTile width={layout.tileWidth} icon="plus-circle" label="Contribute" detail="Add to a circle" onPress={() => openLedger()} />
           <ServiceTile width={layout.tileWidth} icon="users" label="Circles" detail={`${circles.length} active ${circles.length === 1 ? 'group' : 'groups'}`} onPress={() => router.push('/circles')} />
           <ServiceTile width={layout.tileWidth} icon="activity" label="Activity" detail="Track every move" onPress={() => router.push('/activity')} />
           <ServiceTile width={layout.tileWidth} icon="file-text" label="Statements" detail="Export your records" onPress={() => router.push('/statement')} />
+          <ServiceTile width={layout.tileWidth} icon="target" label="Savings goals" detail="Track circle targets" onPress={() => router.push('/goals' as Href)} />
+          <ServiceTile width={layout.tileWidth} icon="calendar" label="Meetings" detail="Agendas and attendance" onPress={() => router.push('/meetings' as Href)} />
+          <ServiceTile width={layout.tileWidth} icon="check-square" label="Proposals" detail="Vote on circle decisions" onPress={() => router.push('/proposals' as Href)} />
+          <ServiceTile width={layout.tileWidth} icon="pie-chart" label="Financial reports" detail="Admin ledger summaries" onPress={() => router.push('/reports' as Href)} />
         </View>
         <Pressable
           testID="home-welfare"
@@ -286,7 +316,7 @@ export default function HomeScreen() {
           <View style={styles.snapshotCopy}>
             <Text style={[styles.snapshotLabel, { color: colors.mutedForeground }]}>WELFARE SET ASIDE</Text>
             <Text style={[styles.snapshotAmount, { color: colors.foreground }]}>
-              {finance.setAside > 0 ? `${api.kesLabel(finance.setAside)} held, not spent` : 'Nothing set aside yet'}
+              {view.setAside > 0 ? `${api.kesLabel(view.setAside)} held, not spent` : 'Nothing set aside yet'}
             </Text>
           </View>
           <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
@@ -294,7 +324,7 @@ export default function HomeScreen() {
         {runningLoans.length > 0 ? (
           <Pressable onPress={() => router.push('/loans')} accessibilityRole="button" style={({ pressed }) => [styles.snapshot, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.82 : 1 }]}>
             <View style={[styles.snapshotIcon, { backgroundColor: colors.successSoft }]}><MaterialCommunityIcons name="hand-coin-outline" size={19} color={colors.primary} /></View>
-            <View style={styles.snapshotCopy}><Text style={[styles.snapshotLabel, { color: colors.mutedForeground }]}>{runningLoans.length === 1 ? `CURRENT LOAN · ${runningLoans[0].status.toUpperCase()}` : `${runningLoans.length} LOANS OUTSTANDING`}</Text><Text style={[styles.snapshotAmount, { color: colors.foreground }]}>{api.kesLabel(finance.outstanding)} remaining</Text></View>
+            <View style={styles.snapshotCopy}><Text style={[styles.snapshotLabel, { color: colors.mutedForeground }]}>{runningLoans.length === 1 ? `CURRENT LOAN · ${runningLoans[0].status.toUpperCase()}` : `${runningLoans.length} LOANS OUTSTANDING`}</Text><Text style={[styles.snapshotAmount, { color: colors.foreground }]}>{api.kesLabel(view.outstanding)} remaining</Text></View>
             <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
           </Pressable>
         ) : null}
@@ -331,7 +361,7 @@ export default function HomeScreen() {
           action="View all"
           onAction={() => router.push('/activity')}
         />
-        {contributions.slice(0, 3).map((item) => (
+        {ledgerRows.slice(0, 3).map((item) => (
           <ActivityRow key={item.id} {...item} />
         ))}
       </Screen>
@@ -340,7 +370,7 @@ export default function HomeScreen() {
         onClose={() => setModalVisible(false)}
         onSave={addContribution}
         circles={circles}
-        initialCircleId={contributionCircleId}
+        initialCircleId={contributionCircleId ?? activeCircle?.id}
         initialType={ledgerType}
       />
       <CircleDetailModal
@@ -377,13 +407,32 @@ export default function HomeScreen() {
           await removeCircleMember(circleId, memberId);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }}
+        onAssignCoAdmin={async (circleId, memberId) => {
+          await setCircleMemberRole(circleId, memberId, 'co-admin');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          return { success: true, message: 'Co-Admin role updated.' };
+        }}
+        onRemoveCoAdmin={async (circleId, memberId) => {
+          await setCircleMemberRole(circleId, memberId, 'member');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          return { success: true, message: 'Co-Admin role removed.' };
+        }}
+        onTransferPrimaryAdmin={async (circleId, memberId) => {
+          await transferPrimaryAdmin(circleId, memberId);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
       />
       <NotificationsModal
         visible={notificationsVisible}
         onClose={() => setNotificationsVisible(false)}
-        contributions={contributions}
-        loans={loans}
-        circles={circles}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        onMarkRead={markNotificationRead}
+        onMarkAllRead={markAllNotificationsRead}
+        onOpen={(link) => {
+          setNotificationsVisible(false);
+          router.push(link as Href);
+        }}
       />
     </>
   );
@@ -480,14 +529,13 @@ function AttentionRow({ testID, icon, label, detail, warn, onPress }: { testID: 
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   overview: { marginBottom: 17 },
   overviewWide: { flexDirection: 'row', alignItems: 'stretch' },
   heroWrap: { position: 'relative' },
   heroWrapWide: { flex: 5, paddingRight: 12 },
   heroCard: { borderRadius: 24, padding: 22, minHeight: 184, overflow: 'hidden' },
   heroCardWide: { flex: 1 },
-  heroTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  heroTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
   heroOrb: {
     position: 'absolute',
     width: 220,
@@ -510,8 +558,10 @@ const styles = StyleSheet.create({
   },
   heroEyebrow: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 10.5,
+    fontSize: 11,
     letterSpacing: 1.8,
+    // Shrinking here squeezed the label into four stacked words; the badge wraps instead.
+    flexShrink: 0,
   },
   heroFooter: {
     flexDirection: 'row',
@@ -520,7 +570,7 @@ const styles = StyleSheet.create({
     marginTop: 22,
   },
   heroMonthWrap: { flex: 1, paddingRight: 10 },
-  heroMeta: { fontFamily: 'Inter_400Regular', fontSize: 10.5 },
+  heroMeta: { fontFamily: 'Inter_400Regular', fontSize: 11 },
   heroMonth: { fontFamily: 'Inter_600SemiBold', fontSize: 12, marginTop: 4 },
   trustBadge: {
     flexDirection: 'row',
@@ -530,19 +580,21 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 999,
     borderWidth: 1,
+    flexShrink: 0,
   },
-  trustText: { fontFamily: 'Inter_600SemiBold', fontSize: 10.5, letterSpacing: 0.2 },
+  trustText: { fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.2 },
   heroQuickBtn: {
     flexDirection: 'row',
     gap: 4,
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    minHeight: 44,
     borderRadius: 999,
     borderWidth: 1,
   },
   heroQuickText: { fontFamily: 'Inter_600SemiBold', fontSize: 11.5 },
-  statsRow: { flexDirection: 'row', gap: 10 },
+  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   statsColumn: { flexDirection: 'column', flex: 2, gap: 10 },
   serviceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   cardGrid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 10 },
@@ -550,7 +602,7 @@ const styles = StyleSheet.create({
   serviceTile: { minHeight: 110, borderRadius: 18, borderWidth: 1, padding: 14 },
   serviceIcon: { width: 36, height: 36, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   serviceLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 13.5, letterSpacing: -0.2 },
-  serviceDetail: { fontFamily: 'Inter_400Regular', fontSize: 10.5, marginTop: 4 },
+  serviceDetail: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4 },
   snapshot: { borderRadius: 17, borderWidth: 1, padding: 13, flexDirection: 'row', gap: 10, alignItems: 'center', marginTop: 17 },
   newGroup: { borderRadius: 18, borderWidth: 1, padding: 15, flexDirection: 'row', gap: 11, alignItems: 'center' },
   newGroupIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
@@ -558,30 +610,30 @@ const styles = StyleSheet.create({
   newGroupCopy: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16, marginTop: 4 },
   snapshotIcon: { width: 37, height: 37, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   snapshotCopy: { flex: 1 },
-  snapshotLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.2 },
+  snapshotLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   snapshotAmount: { fontFamily: 'Inter_600SemiBold', fontSize: 13, marginTop: 4 },
   bridge: { borderRadius: 20, borderWidth: 1, paddingHorizontal: 15, paddingTop: 6, paddingBottom: 13 },
   bridgeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 11, minHeight: 46 },
   bridgeLabelWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   bridgeLabel: { fontFamily: 'Inter_500Medium', fontSize: 12.5 },
-  bridgeHint: { fontFamily: 'Inter_400Regular', fontSize: 10.5, flexBasis: '100%', marginLeft: 20 },
+  bridgeHint: { fontFamily: 'Inter_400Regular', fontSize: 11, flexBasis: '100%', marginLeft: 20 },
   bridgeValue: { fontFamily: 'Inter_700Bold', fontSize: 13, letterSpacing: -0.2, fontVariant: ['tabular-nums'] },
   bridgeTotal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderTopWidth: 1, marginTop: 4, paddingTop: 13 },
-  bridgeTotalLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.2 },
+  bridgeTotalLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   bridgeTotalValue: { fontFamily: 'Inter_700Bold', fontSize: 17, letterSpacing: -0.4, fontVariant: ['tabular-nums'] },
   bridgeNote: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16, marginTop: 10 },
   loanFacts: { flexDirection: 'row', gap: 10, marginTop: 10 },
   fact: { flex: 1, borderRadius: 18, borderWidth: 1, padding: 14 },
-  factLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.2 },
+  factLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   factValue: { fontFamily: 'Inter_700Bold', fontSize: 19, letterSpacing: -0.5, marginTop: 6, fontVariant: ['tabular-nums'] },
-  factCaption: { fontFamily: 'Inter_400Regular', fontSize: 10.5, lineHeight: 15, marginTop: 6 },
+  factCaption: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 15, marginTop: 6 },
   attention: { borderRadius: 20, borderWidth: 1, paddingHorizontal: 15 },
   attentionRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 13, minHeight: 62, borderBottomWidth: 1 },
   attentionIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   attentionCopy: { flex: 1 },
   attentionLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
-  attentionDetail: { fontFamily: 'Inter_400Regular', fontSize: 10.5, lineHeight: 15, marginTop: 3 },
+  attentionDetail: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 15, marginTop: 3 },
   summary: { borderRadius: 20, borderWidth: 1, padding: 15, gap: 8 },
   summaryLine: { fontFamily: 'Inter_400Regular', fontSize: 12.5, lineHeight: 19 },
-  summaryFoot: { fontFamily: 'Inter_400Regular', fontSize: 10.5, lineHeight: 15, marginTop: 2 },
+  summaryFoot: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 15, marginTop: 2 },
 });

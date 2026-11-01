@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -35,7 +35,42 @@ function RootLayoutNav() {
   );
 }
 
+// react-native-web cannot express these through style props, so they go in the document.
+// CanvasText and Canvas are system colours, which is what keeps a single ring legible in
+// both themes instead of a hardcoded green that vanishes on one of them.
+const WEB_GLOBAL_CSS = `
+:where(a, button, input, textarea, select, [tabindex], [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="switch"]):focus-visible {
+  outline: 2px solid CanvasText !important;
+  outline-offset: 2px !important;
+}
+[role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="switch"], button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+html { -webkit-text-size-adjust: 100%; }
+`;
+
+function useWebGlobalStyles() {
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    if (document.getElementById('turiwa-global')) return;
+    const tag = document.createElement('style');
+    tag.id = 'turiwa-global';
+    tag.textContent = WEB_GLOBAL_CSS;
+    document.head.appendChild(tag);
+  }, []);
+}
+
 export default function RootLayout() {
+  useWebGlobalStyles();
   const [fontsLoaded, fontError] = useFonts({
     Inter_400Regular: PlusJakartaSans_400Regular,
     Inter_500Medium: PlusJakartaSans_500Medium,

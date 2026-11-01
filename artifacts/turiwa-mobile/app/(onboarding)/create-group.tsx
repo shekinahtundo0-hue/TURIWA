@@ -56,7 +56,7 @@ export default function CreateGroupScreen() {
 const styles = StyleSheet.create({
   orRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20, marginBottom: 16 },
   orLine: { flex: 1, height: 1 },
-  orText: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.2 },
+  orText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   stepRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 15, padding: 14, marginBottom: 6 },
   step: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   stepNumber: { fontFamily: 'Inter_700Bold', fontSize: 12 },

@@ -8,7 +8,8 @@ import { useResponsive } from '@/hooks/useResponsive';
 import { useTuriwa } from '@/context/TuriwaContext';
 import type { Circle } from '@/lib/api';
 import { GroupForm } from '@/components/GroupForm';
-import { BrandHeader, CircleCard, CircleDetailModal, PrimaryButton, RecordTransactionModal, Screen, SectionHeading, useSheet } from '@/components/TuriwaUI';
+import { BrandHeader, CircleCard, CircleDetailModal, PrimaryButton, RecordTransactionModal, Screen, ScreenSkeleton, SectionHeading, useSheet } from '@/components/TuriwaUI';
+import { CircleSwitcher } from '@/components/CircleSwitcher';
 
 export default function CirclesScreen() {
   const colors = useColors();
@@ -25,8 +26,11 @@ export default function CirclesScreen() {
     applyFine,
     addContribution,
     removeCircleMember,
+    setCircleMemberRole,
+    transferPrimaryAdmin,
     refresh,
     refreshing,
+    hydrated,
   } = useTuriwa();
   const [visible, setVisible] = useState(false);
   const [detailCircleId, setDetailCircleId] = useState<string | null>(null);
@@ -45,10 +49,17 @@ export default function CirclesScreen() {
     setContributeVisible(true);
   };
   const activeCircle = detailCircleId ? (circles.find((c) => c.id === detailCircleId) ?? null) : null;
+  if (!hydrated) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <Screen><ScreenSkeleton rows={3} /></Screen>
+      </View>
+    );
+  }
   return (
     <>
       <Screen refreshing={refreshing} onRefresh={refresh}>
-        <BrandHeader title="Your circles" subtitle={`${circles.length} ${circles.length === 1 ? 'group' : 'groups'} · everything in one place`} />
+        <BrandHeader title="Your circles" subtitle={`${circles.length} ${circles.length === 1 ? 'group' : 'groups'} · everything in one place`} actions={<CircleSwitcher />} />
         <View style={[styles.summary, { backgroundColor: colors.warmSurface, borderColor: colors.goldBorder }]}>
           <View style={[styles.summaryIcon, { backgroundColor: colors.accent }]}><MaterialCommunityIcons name="hand-heart-outline" size={21} color={colors.onAccent} /></View>
           <View style={{ flex: 1 }}><Text style={[styles.summaryTitle, { color: colors.foreground }]}>Together, you go further</Text><Text style={[styles.summaryCopy, { color: colors.inkSoft }]}>Every contribution builds trust and momentum.</Text></View>
@@ -132,6 +143,20 @@ export default function CirclesScreen() {
         }}
         onRemoveCircleMember={async (circleId, memberId) => {
           await removeCircleMember(circleId, memberId);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
+        onAssignCoAdmin={async (circleId, memberId) => {
+          await setCircleMemberRole(circleId, memberId, 'co-admin');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          return { success: true, message: 'Co-Admin role updated.' };
+        }}
+        onRemoveCoAdmin={async (circleId, memberId) => {
+          await setCircleMemberRole(circleId, memberId, 'member');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          return { success: true, message: 'Co-Admin role removed.' };
+        }}
+        onTransferPrimaryAdmin={async (circleId, memberId) => {
+          await transferPrimaryAdmin(circleId, memberId);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }}
         canDeleteCircle={circles.length > 1}

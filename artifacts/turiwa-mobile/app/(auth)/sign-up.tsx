@@ -141,7 +141,7 @@ export default function SignUpScreen() {
 }
 
 const styles = StyleSheet.create({
-  stepLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.3, marginBottom: 9 },
+  stepLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.3, marginBottom: 9 },
   stepTitle: { fontFamily: 'Inter_700Bold', fontSize: 24, letterSpacing: -0.5 },
   stepCopy: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, marginTop: 7, marginBottom: 22 },
   phoneRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },

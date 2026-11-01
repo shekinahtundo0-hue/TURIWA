@@ -3,6 +3,8 @@ import { contributionsTable, getDb, loansTable, usersTable, type Loan } from "@w
 import { newId } from "./ids";
 import { logger } from "./logger";
 
+type LoanDbExecutor = Pick<ReturnType<typeof getDb>, "insert" | "select">;
+
 // A loan moves the group's cash: the fund hands the principal out, and the member
 // pays it back in instalments. Both movements are ledger entries, so the balance on
 // screen is the sum of the ledger and nothing else — a group cannot show money it has
@@ -15,10 +17,9 @@ import { logger } from "./logger";
 
 /** What the ledger writes when a loan's money moves. Pending requests are excluded by
  *  the caller: nothing has left the fund until the group says yes. */
-export async function recordLoanDisbursement(loan: Loan, date: string): Promise<boolean> {
+export async function recordLoanDisbursement(loan: Loan, date: string, executor: LoanDbExecutor = getDb()): Promise<boolean> {
   if (!loan.circleId) return false;
-  const db = getDb();
-  const rows = await db
+  const rows = await executor
     .insert(contributionsTable)
     .values({
       id: `loan-disb-${loan.id}`,
@@ -29,7 +30,7 @@ export async function recordLoanDisbursement(loan: Loan, date: string): Promise<
       note: `Loan paid out — ${loan.purpose}`,
       status: "Complete",
       type: "LoanDisbursement",
-      member: await memberName(loan.userId),
+      member: await memberName(loan.userId, executor),
       loanId: loan.id,
     })
     .onConflictDoNothing()
@@ -39,11 +40,10 @@ export async function recordLoanDisbursement(loan: Loan, date: string): Promise<
 
 /** One repayment, in the moment it happens, so the fund's cash and the loan's
  *  remaining balance always move by the same amount. */
-export async function recordLoanRepayment(loan: Loan, amount: number): Promise<void> {
+export async function recordLoanRepayment(loan: Loan, amount: number, executor: LoanDbExecutor = getDb(), entryId = newId("c")): Promise<void> {
   if (!loan.circleId || amount <= 0) return;
-  const db = getDb();
-  await db.insert(contributionsTable).values({
-    id: newId("c"),
+  await executor.insert(contributionsTable).values({
+    id: entryId,
     circleId: loan.circleId,
     userId: loan.userId,
     amount,
@@ -51,7 +51,7 @@ export async function recordLoanRepayment(loan: Loan, amount: number): Promise<v
     note: `Loan repayment — ${loan.purpose}`,
     status: "Complete",
     type: "Repayment",
-    member: await memberName(loan.userId),
+    member: await memberName(loan.userId, executor),
     loanId: loan.id,
   });
 }
@@ -104,9 +104,9 @@ export async function linkExistingLoans(): Promise<{ linked: number; ungrouped: 
   return { linked, ungrouped };
 }
 
-async function memberName(userId: string | null): Promise<string | null> {
+async function memberName(userId: string | null, executor: LoanDbExecutor = getDb()): Promise<string | null> {
   if (!userId) return null;
-  const [user] = await getDb()
+  const [user] = await executor
     .select({ name: usersTable.name })
     .from(usersTable)
     .where(eq(usersTable.id, userId))

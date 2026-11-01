@@ -1,4 +1,5 @@
-import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { InterestPeriod } from "./circles";
 
 export const loansTable = pgTable("loans", {
@@ -31,6 +32,9 @@ export const loansTable = pgTable("loans", {
   reviewedBy: text("reviewed_by"),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
   rejectionReason: text("rejection_reason"),
-});
+  // Reused across retries of the same client submission so an automatic approval
+  // cannot create duplicate loans when a response is lost in transit.
+  applicationKey: text("application_key"),
+}, (table) => [uniqueIndex("loans_application_key_unique").on(table.applicationKey).where(sql`${table.applicationKey} IS NOT NULL`)]);
 
 export type Loan = typeof loansTable.$inferSelect;

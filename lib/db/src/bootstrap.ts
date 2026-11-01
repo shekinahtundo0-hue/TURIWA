@@ -107,6 +107,24 @@ export async function ensureSchema(db: AppDb): Promise<void> {
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS loan_interest_period TEXT NOT NULL DEFAULT 'Month'`);
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS created_by TEXT`);
   await db.execute(sql`ALTER TABLE circles ADD COLUMN IF NOT EXISTS members_list JSONB`);
+  // This application writes memberships through authenticated API handlers. Keep
+  // the Co-Admin cap at the database boundary too, so a future server path cannot
+  // bypass the row-locked role checks.
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION enforce_circle_coadmin_limit() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.members_list IS NOT NULL AND jsonb_typeof(NEW.members_list) = 'array' AND
+        (SELECT count(*) FROM jsonb_array_elements(NEW.members_list) AS item
+         WHERE item->>'role' = 'co-admin' AND COALESCE(item->>'status', 'active') = 'active') > 2 THEN
+        RAISE EXCEPTION 'A circle can have at most two Co-Admins.' USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $$
+  `);
+  await db.execute(sql`DROP TRIGGER IF EXISTS circles_coadmin_limit ON circles`);
+  await db.execute(sql`CREATE TRIGGER circles_coadmin_limit BEFORE INSERT OR UPDATE OF members_list ON circles FOR EACH ROW EXECUTE FUNCTION enforce_circle_coadmin_limit()`);
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS contributions (
       id TEXT PRIMARY KEY,
@@ -139,7 +157,8 @@ export async function ensureSchema(db: AppDb): Promise<void> {
       submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       reviewed_by TEXT,
       reviewed_at TIMESTAMPTZ,
-      rejection_reason TEXT
+      rejection_reason TEXT,
+      application_key TEXT
     )
   `);
   await db.execute(sql`
@@ -166,6 +185,23 @@ export async function ensureSchema(db: AppDb): Promise<void> {
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_by TEXT`);
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`);
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
+  await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS application_key TEXT`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS loans_application_key_unique ON loans (application_key) WHERE application_key IS NOT NULL`);
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION public.enforce_circle_coadmin_limit() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.members_list IS NOT NULL AND jsonb_typeof(NEW.members_list) = 'array' AND
+        (SELECT count(*) FROM jsonb_array_elements(NEW.members_list) AS item
+         WHERE item->>'role' = 'co-admin' AND COALESCE(item->>'status', 'active') = 'active') > 2 THEN
+        RAISE EXCEPTION 'A circle can have at most two Co-Admins.' USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $$
+  `);
+  await db.execute(sql`DROP TRIGGER IF EXISTS circles_coadmin_limit ON circles`);
+  await db.execute(sql`CREATE TRIGGER circles_coadmin_limit BEFORE INSERT OR UPDATE OF members_list ON circles FOR EACH ROW EXECUTE FUNCTION public.enforce_circle_coadmin_limit()`);
   await db.execute(sql`UPDATE loans SET requested_principal = principal WHERE requested_principal = 0`);
   await db.execute(sql`UPDATE loans SET requested_months = months WHERE requested_months = 6 AND months <> 6`);
   // A due date written as "15 Apr 2027" can be read back exactly once, so the rows in
@@ -208,6 +244,62 @@ export async function ensureSchema(db: AppDb): Promise<void> {
   await db.execute(sql`ALTER TABLE auth_codes ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0`);
   await db.execute(sql`ALTER TABLE auth_codes ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`);
   await db.execute(sql`ALTER TABLE auth_codes ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP`);
+
+  // Notifications are written by the API from the event that caused them and read
+  // only by the account they name, so the table carries its own recipient column.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      circle_id TEXT,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      link TEXT,
+      entity_id TEXT,
+      read_at TIMESTAMP,
+      dedupe_key TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS circle_id TEXT`);
+  await db.execute(sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS link TEXT`);
+  await db.execute(sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS entity_id TEXT`);
+  await db.execute(sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS read_at TIMESTAMP`);
+  await db.execute(sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key TEXT`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS notifications_user_idx ON notifications (user_id, created_at DESC)`);
+  // A partial unique index leaves un-deduped notifications free while making a
+  // reminder or receipt that carries a key impossible to write twice.
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_key_unique ON notifications (dedupe_key) WHERE dedupe_key IS NOT NULL`);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS notification_preferences (
+      user_id TEXT NOT NULL,
+      circle_id TEXT NOT NULL DEFAULT '',
+      contribution_reminders BOOLEAN NOT NULL DEFAULT TRUE,
+      loan_reminders BOOLEAN NOT NULL DEFAULT TRUE,
+      meeting_reminders BOOLEAN NOT NULL DEFAULT TRUE,
+      savings_updates BOOLEAN NOT NULL DEFAULT TRUE,
+      vote_reminders BOOLEAN NOT NULL DEFAULT TRUE,
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, circle_id)
+    )
+  `);
+  await db.execute(sql`ALTER TABLE notification_preferences ADD COLUMN IF NOT EXISTS vote_reminders BOOLEAN NOT NULL DEFAULT TRUE`);
+  await db.execute(sql`ALTER TABLE notification_preferences ADD COLUMN IF NOT EXISTS meeting_reminders BOOLEAN NOT NULL DEFAULT TRUE`);
+  await db.execute(sql`ALTER TABLE notification_preferences ADD COLUMN IF NOT EXISTS savings_updates BOOLEAN NOT NULL DEFAULT TRUE`);
+
+  // Circle engagement records remain server mediated: every route checks the
+  // current active roster before it reads or changes these rows.
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS savings_goals (id TEXT PRIMARY KEY, circle_id TEXT NOT NULL, created_by TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT 'General', target_amount INTEGER NOT NULL CHECK (target_amount > 0), start_on TEXT NOT NULL, target_on TEXT NOT NULL, frequency TEXT NOT NULL DEFAULT 'Monthly', member_targets JSONB NOT NULL DEFAULT '{}'::jsonb, status TEXT NOT NULL DEFAULT 'active', cancel_reason TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS savings_goals_circle_idx ON savings_goals(circle_id, created_at DESC)`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS savings_goal_entries (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES savings_goals(id), contribution_id TEXT NOT NULL UNIQUE REFERENCES contributions(id), user_id TEXT NOT NULL, request_key TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(goal_id,user_id,request_key))`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS circle_meetings (id TEXT PRIMARY KEY, circle_id TEXT NOT NULL, created_by TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', starts_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ, location TEXT NOT NULL DEFAULT '', meeting_type TEXT NOT NULL DEFAULT 'Regular', status TEXT NOT NULL DEFAULT 'scheduled', minutes TEXT NOT NULL DEFAULT '', attachments JSONB NOT NULL DEFAULT '[]'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS meetings_circle_date_idx ON circle_meetings(circle_id, starts_at)`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS meeting_attendance (meeting_id TEXT NOT NULL REFERENCES circle_meetings(id), user_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'attending', note TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(meeting_id,user_id))`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS meeting_action_items (id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES circle_meetings(id), assigned_to TEXT NOT NULL, title TEXT NOT NULL, due_on TEXT, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS circle_proposals (id TEXT PRIMARY KEY, circle_id TEXT NOT NULL, created_by TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', starts_at TIMESTAMPTZ NOT NULL, deadline TIMESTAMPTZ NOT NULL, eligible_user_ids JSONB NOT NULL, anonymous BOOLEAN NOT NULL DEFAULT FALSE, approval_threshold INTEGER NOT NULL DEFAULT 50 CHECK(approval_threshold BETWEEN 1 AND 100), allow_abstentions BOOLEAN NOT NULL DEFAULT FALSE, results_visibility TEXT NOT NULL DEFAULT 'after_close', status TEXT NOT NULL DEFAULT 'open', closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS proposal_options (id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL REFERENCES circle_proposals(id), label TEXT NOT NULL, position INTEGER NOT NULL)`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS proposal_votes (id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL REFERENCES circle_proposals(id), voter_key TEXT NOT NULL, voter_user_id TEXT, option_id TEXT NOT NULL REFERENCES proposal_options(id), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(proposal_id,voter_key))`);
 }
 
 export async function seedIfEmpty(db: AppDb, hashPassword: (password: string) => string): Promise<void> {

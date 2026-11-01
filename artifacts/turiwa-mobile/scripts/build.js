@@ -148,9 +148,11 @@ async function startMetro(expoPublicDomain, expoPublicReplId) {
     console.log(`Setting EXPO_PUBLIC_REPL_ID=${expoPublicReplId}`);
   }
 
+  // Calling the Windows pnpm.cmd shim with spawn() and shell:false fails with ENOENT.
+  // Run Expo's checked-in CLI through the current Node executable on every host.
   metroProcess = spawn(
-    'pnpm',
-    ['exec', 'expo', 'start', '--no-dev', '--minify', '--localhost'],
+    process.execPath,
+    [path.join(projectRoot, 'node_modules', 'expo', 'bin', 'cli'), 'start', '--no-dev', '--minify', '--localhost'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,

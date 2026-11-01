@@ -262,6 +262,70 @@ export type AppState = {
   loans: Loan[];
 };
 
+// The kinds of message the notification centre carries. Kept in step with the
+// server's list so a screen that switches on a type cannot silently miss one.
+export const NOTIFICATION_TYPES = [
+  'loan_application',
+  'loan_approved',
+  'loan_rejected',
+  'loan_repayment',
+  'loan_due',
+  'loan_overdue',
+  'contribution',
+  'contribution_reminder',
+  'contribution_missed',
+  'fine',
+  'member_joined',
+  'member_removed',
+  'role_changed',
+  'savings_goal',
+  'savings_update',
+  'meeting',
+  'meeting_update',
+  'proposal',
+  'vote_reminder',
+  'vote_result',
+  'announcement',
+] as const;
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+
+export type AppNotification = {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  link: string | null;
+  entityId: string | null;
+  circleId: string | null;
+  circleName: string | null;
+  read: boolean;
+  createdAt: string;
+};
+
+export type NotificationPreferenceRow = {
+  circleId: string;
+  contributionReminders: boolean;
+  loanReminders: boolean;
+  meetingReminders: boolean;
+  savingsUpdates: boolean;
+  voteReminders: boolean;
+};
+
+export type NotificationCentre = {
+  notifications: AppNotification[];
+  unreadCount: number;
+  preferences: NotificationPreferenceRow[];
+};
+
+export type NotificationPreferencePatch = {
+  circleId?: string;
+  contributionReminders?: boolean;
+  loanReminders?: boolean;
+  meetingReminders?: boolean;
+  savingsUpdates?: boolean;
+  voteReminders?: boolean;
+};
+
 export type AuthUser = {
   id: string;
   name: string;
@@ -374,8 +438,44 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export type SavingsGoalRecord = { id: string; circleId: string; name: string; description: string; category: string; targetAmount: number; startOn: string; targetOn: string; frequency: string; status: string; amountSaved: number; contributions: Contribution[] };
+export type MeetingRecord = { id: string; circleId: string; title: string; description: string; startsAt: string; endsAt: string | null; location: string; meetingType: string; status: string; minutes: string };
+export type ProposalRecord = { id: string; circleId: string; title: string; description: string; startsAt: string; deadline: string; anonymous: boolean; status: string; hasVoted: boolean; options: Array<{ id: string; label: string }>; results?: Array<{ optionId: string; label: string; votes: number }> };
+export const getGoals = (circleId: string) => request<SavingsGoalRecord[]>(`/circles/${encodeURIComponent(circleId)}/goals`);
+export const createGoal = (circleId: string, body: Record<string, unknown>) => request<SavingsGoalRecord>(`/circles/${encodeURIComponent(circleId)}/goals`, { method: 'POST', body: JSON.stringify(body) });
+export const getMeetings = (circleId: string) => request<MeetingRecord[]>(`/circles/${encodeURIComponent(circleId)}/meetings`);
+export const createMeeting = (circleId: string, body: Record<string, unknown>) => request<MeetingRecord>(`/circles/${encodeURIComponent(circleId)}/meetings`, { method: 'POST', body: JSON.stringify(body) });
+export const setMeetingAttendance = (meetingId: string, status: 'attending' | 'apology') => request(`/meetings/${encodeURIComponent(meetingId)}/attendance`, { method: 'PUT', body: JSON.stringify({ status }) });
+export const getProposals = (circleId: string) => request<ProposalRecord[]>(`/circles/${encodeURIComponent(circleId)}/proposals`);
+export const createProposal = (circleId: string, body: Record<string, unknown>) => request<ProposalRecord>(`/circles/${encodeURIComponent(circleId)}/proposals`, { method: 'POST', body: JSON.stringify(body) });
+export const castProposalVote = (proposalId: string, optionId: string) => request(`/proposals/${encodeURIComponent(proposalId)}/vote`, { method: 'POST', body: JSON.stringify({ optionId }) });
+export const getFinancialReport = (circleId: string) => request<any>(`/circles/${encodeURIComponent(circleId)}/financial-report`);
+
 export function fetchState() {
   return request<AppState>('/state');
+}
+
+// The notification centre is fetched beside the state rather than inside it: a
+// reminder pass runs on this call, and its answer is the person's own inbox.
+export function fetchNotifications() {
+  return request<NotificationCentre>('/notifications');
+}
+
+export function markNotificationRead(notificationId: string) {
+  return request<{ ok: boolean }>(`/notifications/${encodeURIComponent(notificationId)}/read`, {
+    method: 'POST',
+  });
+}
+
+export function markAllNotificationsRead() {
+  return request<{ ok: boolean }>('/notifications/read-all', { method: 'POST' });
+}
+
+export function saveNotificationPreferences(patch: NotificationPreferencePatch) {
+  return request<{ ok: boolean }>('/notifications/preferences', {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
 }
 
 export function addContribution(
@@ -430,17 +530,17 @@ export function applyFine(circleId: string, memberId: string) {
   });
 }
 
-export function applyForLoan(amount: number, purpose: string, circleId: string, preferredMonths: number) {
+export function applyForLoan(amount: number, purpose: string, circleId: string, preferredMonths: number, applicationKey?: string) {
   return request<AppState>('/loans', {
     method: 'POST',
-    body: JSON.stringify({ amount, purpose, circleId, preferredMonths }),
+    body: JSON.stringify({ amount, purpose, circleId, preferredMonths, ...(applicationKey ? { applicationKey } : {}) }),
   });
 }
 
-export function repayLoan(loanId: string, amount: number) {
+export function repayLoan(loanId: string, amount: number, idempotencyKey?: string) {
   return request<AppState>(`/loans/${loanId}/repay`, {
     method: 'POST',
-    body: JSON.stringify({ amount }),
+    body: JSON.stringify({ amount, ...(idempotencyKey ? { idempotencyKey } : {}) }),
   });
 }
 
@@ -461,6 +561,20 @@ export function rejectLoan(loanId: string, reason: string) {
 export function removeCircleMember(circleId: string, memberId: string) {
   return request<AppState>(`/circles/${encodeURIComponent(circleId)}/members/${encodeURIComponent(memberId)}`, {
     method: 'DELETE',
+  });
+}
+
+export function setCircleMemberRole(circleId: string, memberId: string, role: 'member' | 'co-admin') {
+  return request<AppState>(`/circles/${encodeURIComponent(circleId)}/members/${encodeURIComponent(memberId)}/role`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  });
+}
+
+export function transferPrimaryAdmin(circleId: string, memberId: string) {
+  return request<AppState>(`/circles/${encodeURIComponent(circleId)}/transfer-primary`, {
+    method: 'POST',
+    body: JSON.stringify({ memberId }),
   });
 }
 

@@ -148,7 +148,7 @@ const styles = StyleSheet.create({
   leafTop: { top: '15%', transform: [{ rotate: '0deg' }] },
   markDot: { position: 'absolute', top: '50%' },
   authHeader: { alignItems: 'center', marginBottom: 28 },
-  backButton: { alignSelf: 'flex-start', paddingVertical: 8, paddingRight: 8, marginBottom: 4 },
+  backButton: { alignSelf: 'flex-start', minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', marginStart: -10, marginBottom: -4 },
   authTitle: { fontFamily: 'Inter_700Bold', fontSize: 28, letterSpacing: -0.7, marginTop: 12, textAlign: 'center' },
   authSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 14, lineHeight: 21, textAlign: 'center', marginTop: 7, maxWidth: 320 },
   fieldGroup: { marginBottom: 14 },

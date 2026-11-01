@@ -51,9 +51,8 @@ export const entryDelta = (type: LedgerType) => (isOutflow(type) || isSetAside(t
  *  what it set aside, less what it handed over as loans. The API refuses a loan above
  *  this, so the ceiling a member sees is the rule that stops them rather than a number
  *  only their phone believes. */
-export async function circleCash(circleId: string): Promise<number> {
-  const db = getDb();
-  const rows = await db
+export async function circleCash(circleId: string, executor: Pick<ReturnType<typeof getDb>, "select"> = getDb()): Promise<number> {
+  const rows = await executor
     .select({ amount: contributionsTable.amount, type: contributionsTable.type })
     .from(contributionsTable)
     .where(eq(contributionsTable.circleId, circleId));
