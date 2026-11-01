@@ -1,5 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTuriwa } from '@/context/TuriwaContext';
@@ -7,6 +7,7 @@ import { useColors } from '@/hooks/useColors';
 import { isGoogleAuthConfigured } from '@/lib/firebase';
 import { signInWithGoogleWeb, takeGoogleRedirectToken } from '@/lib/googleAuth';
 import { isGoogleNativeAuthConfigured, useGoogleNativeAuth } from '@/lib/googleAuthNative';
+import { circleInviteHref, normalizeCircleInviteCode } from '@/lib/circleInvite';
 
 type GoogleFlow = { busy: boolean; error: string; start: () => Promise<void> };
 
@@ -25,12 +26,14 @@ export function GoogleSignInButton() {
 
 function WebGoogleSignIn() {
   const { signInWithGoogle, nextStopAfterAuth } = useTuriwa();
+  const { code: inviteParam } = useLocalSearchParams<{ code?: string }>();
+  const inviteCode = normalizeCircleInviteCode(inviteParam);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const finish = async (idToken: string) => {
     await signInWithGoogle(idToken);
-    router.replace(await nextStopAfterAuth());
+    router.replace(circleInviteHref(inviteCode) ?? await nextStopAfterAuth());
   };
 
   useEffect(() => {
@@ -82,13 +85,15 @@ function WebGoogleSignIn() {
 
 function NativeGoogleSignIn() {
   const { signInWithGoogle, nextStopAfterAuth } = useTuriwa();
+  const { code: inviteParam } = useLocalSearchParams<{ code?: string }>();
+  const inviteCode = normalizeCircleInviteCode(inviteParam);
 
   const finish = useCallback(
     async (idToken: string) => {
       await signInWithGoogle(idToken);
-      router.replace(await nextStopAfterAuth());
+      router.replace(circleInviteHref(inviteCode) ?? await nextStopAfterAuth());
     },
-    [signInWithGoogle, nextStopAfterAuth],
+    [signInWithGoogle, nextStopAfterAuth, inviteCode],
   );
 
   const flow = useGoogleNativeAuth(finish);

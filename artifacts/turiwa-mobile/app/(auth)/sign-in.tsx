@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { AuthButton, AuthField, AuthHeader, AuthShell } from '@/components/AuthUI';
@@ -7,10 +7,13 @@ import { AuthDivider, GoogleSignInButton } from '@/components/GoogleSignInButton
 import { useColors } from '@/hooks/useColors';
 import { useTuriwa } from '@/context/TuriwaContext';
 import { isGoogleAuthConfigured } from '@/lib/firebase';
+import { circleInviteHref, normalizeCircleInviteCode } from '@/lib/circleInvite';
 
 export default function SignInScreen() {
   const colors = useColors();
   const { signIn, nextStopAfterAuth } = useTuriwa();
+  const { code: inviteParam } = useLocalSearchParams<{ code?: string }>();
+  const inviteCode = normalizeCircleInviteCode(inviteParam);
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -22,7 +25,7 @@ export default function SignInScreen() {
     }
     try {
       await signIn(phone, password);
-      router.replace(await nextStopAfterAuth());
+      router.replace(circleInviteHref(inviteCode) ?? await nextStopAfterAuth());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not sign in.');
     }

@@ -31,7 +31,8 @@
       }
     },
     "extra": {
-      "apiUrl": "http://localhost:5000"
+      "apiUrl": "http://localhost:5000",
+      "publicAppUrl": "https://turiwa-mobile.pages.dev"
     },
     "web": {
       "favicon": "./assets/images/icon-brand.png"

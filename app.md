@@ -151,6 +151,7 @@ and route groups. The same UI targets iOS, Android and web.
 | `app/(auth)/forgot-password.tsx` | Password reset flow using phone verification. |
 | `app/(onboarding)/_layout.tsx` | Onboarding stack layout. |
 | `app/(onboarding)/create-group.tsx` | Onboarding screen for creating a savings circle. |
+| `app/(onboarding)/join-circle.tsx` | Joins a circle by invite code. HTTPS invite links open this route with a `code` query parameter; guests authenticate first and are returned to the link, which redeems the code automatically. |
 | `app/(tabs)/_layout.tsx` | Responsive signed-in navigation; defines Home, Circles, Loans, Activity and Profile tabs and desktop/compact variants. |
 | `app/(tabs)/index.tsx` | Home dashboard with financial summary and shortcuts/attention items. |
 | `app/(tabs)/circles.tsx` | Savings circles list and group selection/creation screen. |

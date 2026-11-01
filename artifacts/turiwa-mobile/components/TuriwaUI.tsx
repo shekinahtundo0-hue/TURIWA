@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useResponsive } from '@/hooks/useResponsive';
 import { cycleNoun, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type Circle, type CircleMember, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
+import { circleInviteUrl } from '@/lib/circleInvite';
 
 // "3 two-week cycles", "1 month", "5 weeks" - the pace copy has to read well for
 // every frequency the group sets.
@@ -672,12 +673,13 @@ export function CircleDetailModal({
   };
 
   const shareInvite = async () => {
-    const message = `Join my Turiwa circle “${circle.name}”\nInvite code: ${circle.joinCode}\nContribution: KES ${circle.contribution.toLocaleString()} every ${frequencyNoun(circle.frequency)}\nTarget: KES ${circle.target.toLocaleString()}\nOpen Turiwa, choose Join a circle, and enter this code.`;
-    setInvite({ message, result: 'Invite code ready to share.' });
+    const url = circleInviteUrl(circle.joinCode);
+    const message = `Join my Turiwa circle “${circle.name}”\nOpen this link to join: ${url}\nInvite code: ${circle.joinCode}\nContribution: KES ${circle.contribution.toLocaleString()} every ${frequencyNoun(circle.frequency)}\nTarget: KES ${circle.target.toLocaleString()}`;
+    setInvite({ message, result: 'Invite link ready to share.' });
     try {
       await Share.share({ message, title: `Turiwa group ${circle.name}` });
-    } catch {
-      // Dismissed
+    } catch (error) {
+      setInvite({ message, result: error instanceof Error ? error.message : 'Could not share the invite link.' });
     }
   };
 

@@ -1,17 +1,20 @@
 import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AuthButton, AuthField, AuthHeader, AuthShell, ProgressSegments } from '@/components/AuthUI';
 import { useColors } from '@/hooks/useColors';
 import { useTuriwa } from '@/context/TuriwaContext';
 import * as api from '@/lib/api';
+import { circleInviteHref, normalizeCircleInviteCode } from '@/lib/circleInvite';
 
 const countries = ['+254', '+255', '+256'];
 
 export default function SignUpScreen() {
   const colors = useColors();
   const { createAccount, nextStopAfterAuth } = useTuriwa();
+  const { code: inviteParam } = useLocalSearchParams<{ code?: string }>();
+  const inviteCode = normalizeCircleInviteCode(inviteParam);
   const [step, setStep] = useState(1);
   const [otpSent, setOtpSent] = useState(false);
   const [country, setCountry] = useState('+254');
@@ -68,7 +71,7 @@ export default function SignUpScreen() {
     setBusy(true);
     try {
       await createAccount(name, fullPhone, password);
-      router.replace(await nextStopAfterAuth());
+      router.replace(circleInviteHref(inviteCode) ?? await nextStopAfterAuth());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create your account.');
       setBusy(false);
