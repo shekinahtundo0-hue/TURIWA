@@ -33,10 +33,10 @@ export function useResponsive(): Layout {
   const { width, height } = useWindowDimensions();
 
   return useMemo(() => {
-    // A phone on its side is wide but has no vertical room, so it keeps the phone
-    // layout instead of stretching two-column cards into a 390px-tall window.
-    const cramped = height < 640;
-    const mode: LayoutMode = cramped || width < TABLET_MIN_WIDTH
+    // A phone turned sideways is wide but still short, so keep its phone layout.
+    // A short desktop browser window should remain desktop and use its sidebar.
+    const compactLandscapePhone = height < 520 && width < DESKTOP_MIN_WIDTH;
+    const mode: LayoutMode = compactLandscapePhone || width < TABLET_MIN_WIDTH
       ? 'phone'
       : width >= DESKTOP_MIN_WIDTH
         ? 'desktop'
