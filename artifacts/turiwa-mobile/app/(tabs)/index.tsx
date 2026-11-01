@@ -40,7 +40,7 @@ export default function HomeScreen() {
   const layout = useResponsive();
   const wide = layout.isDesktop;
   const router = useRouter();
-  const { circles, contributions, addContribution, loans, finance, user, hydrated, profileName, live, liveError, refresh, refreshing, setCircleFine, applyFine } = useTuriwa();
+  const { circles, contributions, addContribution, loans, finance, user, hydrated, profileName, live, liveError, refresh, refreshing, setCircleFine, applyFine, removeCircleMember } = useTuriwa();
   const [modalVisible, setModalVisible] = useState(false);
   const [contributionCircleId, setContributionCircleId] = useState<string | undefined>(undefined);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
@@ -347,8 +347,19 @@ export default function HomeScreen() {
         visible={detailCircle !== null}
         circle={detailCircle ?? undefined}
         contributions={contributions}
+        loans={loans}
         isAdmin={detailCircle ? isAdmin(detailCircle) : false}
+        isCoAdmin={detailCircle ? (detailCircle.coAdminIds ?? []).includes(user?.id ?? '') : false}
+        currentUserId={user?.id}
         onClose={() => setDetailCircle(null)}
+        onApplyLoan={(circleId) => {
+          setDetailCircle(null);
+          router.push({ pathname: '/loans', params: { circleId } });
+        }}
+        onReviewLoans={() => {
+          setDetailCircle(null);
+          router.push('/loans');
+        }}
         onContribute={(circleId) => {
           setDetailCircle(null);
           setContributionCircleId(circleId);
@@ -360,6 +371,10 @@ export default function HomeScreen() {
         }}
         onApplyFine={async (circleId, memberId) => {
           await applyFine(circleId, memberId);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
+        onRemoveCircleMember={async (circleId, memberId) => {
+          await removeCircleMember(circleId, memberId);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }}
       />

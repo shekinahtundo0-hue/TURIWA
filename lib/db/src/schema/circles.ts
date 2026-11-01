@@ -1,7 +1,7 @@
 import { integer, jsonb, pgTable, text } from "drizzle-orm/pg-core";
 
 export type MemberRole = "admin" | "co-admin" | "member";
-export type MemberStatus = "pending" | "active";
+export type MemberStatus = "pending" | "active" | "removed";
 // A group decides whether its rate is quoted per month or per year; the money
 // compounds on the outstanding balance either way.
 export type InterestPeriod = "Month" | "Year";
@@ -15,6 +15,8 @@ export type CircleMemberRow = {
   role: MemberRole;
   status: MemberStatus;
   joinedDate: string;
+  removedAt?: string;
+  removedBy?: string;
 };
 
 export const circlesTable = pgTable("circles", {

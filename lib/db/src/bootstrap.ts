@@ -133,7 +133,13 @@ export async function ensureSchema(db: AppDb): Promise<void> {
       interest_period TEXT NOT NULL DEFAULT 'Month',
       due_date TEXT NOT NULL,
       purpose TEXT NOT NULL,
-      status TEXT NOT NULL
+      status TEXT NOT NULL,
+      requested_principal INTEGER NOT NULL DEFAULT 0,
+      requested_months INTEGER NOT NULL DEFAULT 6,
+      submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      reviewed_by TEXT,
+      reviewed_at TIMESTAMPTZ,
+      rejection_reason TEXT
     )
   `);
   await db.execute(sql`
@@ -153,6 +159,15 @@ export async function ensureSchema(db: AppDb): Promise<void> {
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS months INTEGER NOT NULL DEFAULT 6`);
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS interest_period TEXT NOT NULL DEFAULT 'Month'`);
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS due_on TEXT`);
+  // Preserve each submitted request and its review history when approval terms differ.
+  await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS requested_principal INTEGER NOT NULL DEFAULT 0`);
+  await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS requested_months INTEGER NOT NULL DEFAULT 6`);
+  await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_by TEXT`);
+  await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`);
+  await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
+  await db.execute(sql`UPDATE loans SET requested_principal = principal WHERE requested_principal = 0`);
+  await db.execute(sql`UPDATE loans SET requested_months = months WHERE requested_months = 6 AND months <> 6`);
   // A due date written as "15 Apr 2027" can be read back exactly once, so the rows in
   // that shape get the machine-readable date. Anything else keeps no due date rather
   // than a guessed one.

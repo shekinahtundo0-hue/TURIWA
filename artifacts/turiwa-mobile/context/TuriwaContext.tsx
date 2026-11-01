@@ -100,10 +100,11 @@ type TuriwaContextValue = {
   deleteCircle: (circleId: string) => Promise<void>;
   setCircleFine: (circleId: string, lateFine: number) => Promise<void>;
   applyFine: (circleId: string, memberId: string) => Promise<void>;
-  applyForLoan: (amount: number, purpose: string, circleId?: string) => Promise<void>;
+  applyForLoan: (amount: number, purpose: string, circleId: string, preferredMonths: number) => Promise<void>;
   repayLoan: (amount: number, loanId?: string) => Promise<void>;
-  approveLoan: (loanId: string) => Promise<void>;
-  rejectLoan: (loanId: string) => Promise<void>;
+  approveLoan: (loanId: string, terms: { amount: number; months: number; interestRate: number }) => Promise<void>;
+  rejectLoan: (loanId: string, reason: string) => Promise<void>;
+  removeCircleMember: (circleId: string, memberId: string) => Promise<void>;
   signIn: (phone: string, password: string) => Promise<void>;
   signInWithGoogle: (idToken: string) => Promise<void>;
   createAccount: (name: string, phone: string, password: string) => Promise<void>;
@@ -160,7 +161,7 @@ function normalizeCircle(raw: Partial<Circle> & { monthly?: number }, user: Auth
     // Someone the app cannot name is not a member, and an invite nobody has
     // answered is not either, so the headcount is the active roster.
     members: active,
-    pendingInvites: membersList.length - active,
+    pendingInvites: membersList.filter((member) => member.status === 'pending').length,
     target: raw.target ?? 0,
     contribution: raw.contribution ?? raw.monthly ?? 0,
     frequency: raw.frequency ?? 'Monthly',
@@ -176,7 +177,7 @@ function normalizeCircle(raw: Partial<Circle> & { monthly?: number }, user: Auth
     // to the viewer would hand the admin badge, the approvals hub and "you decide on
     // these" to whoever happens to be looking at a group whose founder is unrecorded.
     adminId: raw.createdBy ?? '',
-    coAdminIds: membersList.filter((member) => member.role === 'co-admin').map((member) => member.id),
+    coAdminIds: membersList.filter((member) => member.status === 'active' && member.role === 'co-admin').map((member) => member.id),
     membersList,
     color: raw.color ?? 'green',
   };
@@ -202,13 +203,22 @@ function normalizeLoan(loan: Loan): Loan {
   const totalPayable = loan.totalPayable ?? loan.principal;
   return {
     ...loan,
+    applicantId: loan.applicantId ?? null,
+    applicantName: loan.applicantName ?? 'You',
+    requestedPrincipal: loan.requestedPrincipal ?? loan.principal,
     totalPayable,
     months: loan.months || LOAN_MONTHS,
+    requestedMonths: loan.requestedMonths || loan.months || LOAN_MONTHS,
     interestPeriod: loan.interestPeriod ?? 'Month',
     balance: Math.min(loan.balance ?? totalPayable, totalPayable),
     // A loan cached by an older build has no machine-readable due day. Keeping it null
     // means "the record does not say", which is not the same as "it is late".
     dueOn: loan.dueOn ?? null,
+    submittedAt: loan.submittedAt ?? '',
+    reviewedBy: loan.reviewedBy ?? null,
+    reviewerName: loan.reviewerName ?? null,
+    reviewedAt: loan.reviewedAt ?? null,
+    rejectionReason: loan.rejectionReason ?? null,
   };
 }
 
@@ -376,8 +386,8 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await applyState(await api.applyFine(circleId, memberId));
   };
 
-  const applyForLoan = async (amount: number, purpose: string, circleId?: string) => {
-    await applyState(await api.applyForLoan(amount, purpose, circleId));
+  const applyForLoan = async (amount: number, purpose: string, circleId: string, preferredMonths: number) => {
+    await applyState(await api.applyForLoan(amount, purpose, circleId, preferredMonths));
   };
 
   const repayLoan = async (amount: number, loanId?: string) => {
@@ -388,12 +398,16 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
 
   // Administrator approval of pending loans. The server's answer is the state: a
   // loan that was not approved must not look approved on screen.
-  const approveLoan = async (loanId: string) => {
-    await applyState(await api.approveLoan(loanId));
+  const approveLoan = async (loanId: string, terms: { amount: number; months: number; interestRate: number }) => {
+    await applyState(await api.approveLoan(loanId, terms));
   };
 
-  const rejectLoan = async (loanId: string) => {
-    await applyState(await api.rejectLoan(loanId));
+  const rejectLoan = async (loanId: string, reason: string) => {
+    await applyState(await api.rejectLoan(loanId, reason));
+  };
+
+  const removeCircleMember = async (circleId: string, memberId: string) => {
+    await applyState(await api.removeCircleMember(circleId, memberId));
   };
 
   const openSession = async (session: api.AuthSession) => {
@@ -627,6 +641,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       repayLoan,
       approveLoan,
       rejectLoan,
+      removeCircleMember,
       signIn,
       signInWithGoogle,
       createAccount,

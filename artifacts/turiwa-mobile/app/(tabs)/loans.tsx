@@ -1,8 +1,9 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import React, { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { useLocalSearchParams } from 'expo-router';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useTheme } from '@/context/ThemeContext';
 import { type Finance, Loan, useTuriwa } from '@/context/TuriwaContext';
@@ -15,6 +16,7 @@ import { BrandHeader, PrimaryButton, Screen, SectionHeading, useSheet, styles as
 export default function LoansScreen() {
   const colors = useColors();
   const { isDark } = useTheme();
+  const { circleId: requestedCircleId } = useLocalSearchParams<{ circleId?: string }>();
   const { loans, circles, finance, applyForLoan, repayLoan, approveLoan, rejectLoan, user } = useTuriwa();
   const [applicationVisible, setApplicationVisible] = useState(false);
   const [repaymentFor, setRepaymentFor] = useState<Loan | null>(null);
@@ -22,6 +24,12 @@ export default function LoansScreen() {
   const [approvalFeedback, setApprovalFeedback] = useState<{ message: string; failed: boolean } | null>(null);
   const [approvingLoanId, setApprovingLoanId] = useState<string | null>(null);
   const [rejectingLoanId, setRejectingLoanId] = useState<string | null>(null);
+  const [reviewingLoanId, setReviewingLoanId] = useState<string | null>(null);
+  const [reviewAmount, setReviewAmount] = useState('');
+  const [reviewMonths, setReviewMonths] = useState('6');
+  const [reviewRate, setReviewRate] = useState('5');
+  const [rejectionReason, setRejectionReason] = useState('');
+  const autoOpenedForCircle = useRef(false);
 
   const administeredCircles = circles.filter((c) => {
     const id = user?.id;
@@ -47,13 +55,39 @@ export default function LoansScreen() {
   // so this is the rule and the number on screen are the same thing.
   const lendable = finance.lendable;
 
+  useEffect(() => {
+    if (!autoOpenedForCircle.current && requestedCircleId && circles.some((circle) => circle.id === requestedCircleId)) {
+      autoOpenedForCircle.current = true;
+      setApplicationVisible(true);
+    }
+  }, [circles, requestedCircleId]);
+
+  const openReview = (loan: Loan) => {
+    setReviewingLoanId(loan.id);
+    setReviewAmount(String(loan.requestedPrincipal));
+    setReviewMonths(String(loan.requestedMonths));
+    setReviewRate(String(loan.interestRate));
+    setRejectionReason('');
+    setApprovalFeedback(null);
+  };
+
   const handleApprove = async (loanId: string) => {
     if (approvingLoanId || rejectingLoanId) return;
+    const terms = { amount: Number(reviewAmount), months: Number(reviewMonths), interestRate: Number(reviewRate) };
+    if (!Number.isInteger(terms.amount) || terms.amount < MIN_LOAN || terms.amount > finance.lendable) {
+      setApprovalFeedback({ message: `Enter a whole approved amount from KES ${MIN_LOAN.toLocaleString()} up to the group's available cash.`, failed: true });
+      return;
+    }
+    if (![3, 6, 9, 12].includes(terms.months) || !Number.isInteger(terms.interestRate) || terms.interestRate < 0 || terms.interestRate > 100) {
+      setApprovalFeedback({ message: 'Choose 3, 6, 9, or 12 months and an interest rate from 0% to 100%.', failed: true });
+      return;
+    }
     setApprovingLoanId(loanId);
     try {
-      await approveLoan(loanId);
+      await approveLoan(loanId, terms);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setApprovalFeedback({ message: 'Loan approved — it now counts against the group.', failed: false });
+      setReviewingLoanId(null);
+      setApprovalFeedback({ message: 'Loan approved with the confirmed terms.', failed: false });
     } catch (error) {
       // The server says why it refused, so the member reads that instead of a
       // generic failure that leaves them guessing whether the money moved.
@@ -70,10 +104,15 @@ export default function LoansScreen() {
 
   const handleReject = async (loanId: string) => {
     if (approvingLoanId || rejectingLoanId) return;
+    if (rejectionReason.trim().length < 5) {
+      setApprovalFeedback({ message: 'Enter a rejection reason of at least 5 characters.', failed: true });
+      return;
+    }
     setRejectingLoanId(loanId);
     try {
-      await rejectLoan(loanId);
+      await rejectLoan(loanId, rejectionReason.trim());
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setReviewingLoanId(null);
       setApprovalFeedback({ message: 'Loan request rejected. No money moved from the group.', failed: false });
     } catch (error) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -170,44 +209,50 @@ export default function LoansScreen() {
                           </View>
                         </View>
                         <Text style={[styles.adminApprovalMeta, { color: colors.mutedForeground }]}>
-                          {circle?.name ? `${circle.name} · ` : ''}KES {loan.principal.toLocaleString()} · KES {loan.totalPayable.toLocaleString()} back · {interestLabel(loan.interestRate, loan.interestPeriod)} · KES {loan.monthlyRepayment.toLocaleString()}/mo
+                          {circle?.name ? `${circle.name} · ` : ''}KES {loan.requestedPrincipal.toLocaleString()} · {loan.purpose} · {loan.requestedMonths} months
                         </Text>
                       </View>
-                      <View style={styles.loanDecisionActions}>
-                        <Pressable
-                          testID={`loan-reject-${loan.id}`}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Reject ${loan.purpose}`}
-                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
-                          onPress={() => handleReject(loan.id)}
-                          style={({ pressed }) => [
-                            styles.approveActionBtn,
-                            { backgroundColor: colors.destructiveSoft, opacity: rejectingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
-                          ]}
-                        >
-                          <Feather name={rejectingLoanId === loan.id ? 'clock' : 'x'} size={13} color={colors.destructive} />
-                          <Text style={[styles.approveActionText, { color: colors.destructive }]}>
-                            {rejectingLoanId === loan.id ? 'Rejecting' : 'Reject'}
-                          </Text>
-                        </Pressable>
-                        <Pressable
-                          testID={`loan-approve-${loan.id}`}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Approve ${loan.purpose}`}
-                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
-                          onPress={() => handleApprove(loan.id)}
-                          style={({ pressed }) => [
-                            styles.approveActionBtn,
-                            { backgroundColor: colors.primary, opacity: approvingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
-                          ]}
-                        >
-                          <Feather name={approvingLoanId === loan.id ? 'clock' : 'check'} size={13} color={colors.primaryForeground} />
-                          <Text style={[styles.approveActionText, { color: colors.primaryForeground }]}>
-                            {approvingLoanId === loan.id ? 'Approving' : 'Approve'}
-                          </Text>
-                        </Pressable>
-                      </View>
                     </View>
+                    <Text style={[styles.adminApprovalMeta, { color: colors.mutedForeground, marginTop: 8 }]}>
+                      Applied by {loan.applicantName} · {formatSubmittedAt(loan.submittedAt)}
+                    </Text>
+                    {loan.applicantId === user?.id ? (
+                      <Text style={[styles.pendingNote, { color: colors.accentForeground }]}>
+                        This is your application. It will stay pending until another circle admin reviews it.
+                      </Text>
+                    ) : reviewingLoanId === loan.id ? (
+                      <View style={styles.reviewFields}>
+                        <Text style={[styles.adminApprovalMeta, { color: colors.mutedForeground }]}>
+                          Requested KES {loan.requestedPrincipal.toLocaleString()} over {loan.requestedMonths} months at {interestLabel(loan.interestRate, loan.interestPeriod)}. Approve with the same terms or adjust them below.
+                        </Text>
+                        <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Approved amount (KES)</Text>
+                        <TextInput value={reviewAmount} onChangeText={setReviewAmount} keyboardType="number-pad" accessibilityLabel="Approved loan amount" style={[styles.reviewInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]} />
+                        <View style={styles.reviewTermsRow}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Months</Text>
+                            <TextInput value={reviewMonths} onChangeText={setReviewMonths} keyboardType="number-pad" accessibilityLabel="Approved repayment period in months" style={[styles.reviewInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Interest (%)</Text>
+                            <TextInput value={reviewRate} onChangeText={setReviewRate} keyboardType="number-pad" accessibilityLabel="Approved interest rate" style={[styles.reviewInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]} />
+                          </View>
+                        </View>
+                        <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Rejection reason (required to reject)</Text>
+                        <TextInput value={rejectionReason} onChangeText={setRejectionReason} maxLength={300} multiline placeholder="Explain why this request is declined" placeholderTextColor={colors.mutedForeground} accessibilityLabel="Loan rejection reason" style={[styles.reviewInput, styles.rejectionInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]} />
+                        <View style={styles.reviewActionRow}>
+                          <Pressable testID={`loan-reject-${loan.id}`} disabled={approvingLoanId !== null || rejectingLoanId !== null} onPress={() => handleReject(loan.id)} style={({ pressed }) => [styles.approveActionBtn, { backgroundColor: colors.destructiveSoft, opacity: pressed || rejectingLoanId === loan.id ? 0.65 : 1 }]}>
+                            <Feather name="x" size={13} color={colors.destructive} /><Text style={[styles.approveActionText, { color: colors.destructive }]}>{rejectingLoanId === loan.id ? 'Rejecting…' : 'Reject'}</Text>
+                          </Pressable>
+                          <Pressable testID={`loan-approve-${loan.id}`} disabled={approvingLoanId !== null || rejectingLoanId !== null} onPress={() => handleApprove(loan.id)} style={({ pressed }) => [styles.approveActionBtn, { backgroundColor: colors.primary, opacity: pressed || approvingLoanId === loan.id ? 0.65 : 1 }]}>
+                            <Feather name="check" size={13} color={colors.primaryForeground} /><Text style={[styles.approveActionText, { color: colors.primaryForeground }]}>{approvingLoanId === loan.id ? 'Approving…' : 'Approve with these terms'}</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ) : (
+                      <Pressable testID={`loan-review-${loan.id}`} accessibilityRole="button" onPress={() => openReview(loan)} style={({ pressed }) => [styles.reviewOpenButton, { borderColor: colors.primary, opacity: pressed ? 0.7 : 1 }]}>
+                        <Feather name="file-text" size={14} color={colors.primary} /><Text style={[styles.reviewOpenText, { color: colors.primary }]}>Open application to review</Text>
+                      </Pressable>
+                    )}
                   </View>
                 );
               })
@@ -281,7 +326,7 @@ export default function LoansScreen() {
           </Text>
         </View>
       </Screen>
-      <LoanApplicationModal visible={applicationVisible} circles={circles} finance={finance} onClose={() => setApplicationVisible(false)} onSave={applyForLoan} />
+      <LoanApplicationModal visible={applicationVisible} circles={circles} finance={finance} initialCircleId={requestedCircleId} onClose={() => setApplicationVisible(false)} onSave={applyForLoan} />
       <RepaymentModal visible={repaymentFor !== null} loan={repaymentFor ?? undefined} onClose={() => setRepaymentFor(null)} onSave={(amount) => repayLoan(amount, repaymentFor?.id)} />
       <LoanHistoryModal visible={historyVisible} loans={loans} finance={finance} onClose={() => setHistoryVisible(false)} />
     </>
@@ -311,14 +356,14 @@ function LoanHistoryModal({ visible, loans, finance, onClose }: { visible: boole
                   <View style={styles.historyRowTop}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.historyPurpose, { color: colors.foreground }]}>{loan.purpose}</Text>
-                      <Text style={[styles.historyMeta, { color: colors.mutedForeground }]}>{loan.status === 'Paid off' ? 'Fully repaid' : loan.status === 'Rejected' ? 'Request declined by the group' : loan.status === 'Pending' ? 'Waiting for the group to decide' : `Due ${loan.dueDate}`} · {interestLabel(loan.interestRate, loan.interestPeriod)}</Text>
+                      <Text style={[styles.historyMeta, { color: colors.mutedForeground }]}>{loan.status === 'Paid off' ? 'Repaid in full' : loan.status === 'Rejected' ? `Rejected by ${loan.reviewerName ?? 'circle admin'}${loan.rejectionReason ? ` · ${loan.rejectionReason}` : ''}` : loan.status === 'Pending' ? `Applied ${formatSubmittedAt(loan.submittedAt)} · waiting for review` : `Approved by ${loan.reviewerName ?? 'circle admin'} · due ${loan.dueDate}`} · {interestLabel(loan.interestRate, loan.interestPeriod)}</Text>
                     </View>
-                    <View style={[styles.statusBadge, { backgroundColor: loan.status === 'Active' ? colors.successSoft : loan.status === 'Pending' ? colors.warmSurface : loan.status === 'Rejected' ? colors.destructiveSoft : colors.muted }]}><Text style={[styles.statusBadgeText, { color: loan.status === 'Active' ? colors.primary : loan.status === 'Pending' ? colors.accentForeground : loan.status === 'Rejected' ? colors.destructive : colors.mutedForeground }]}>{loan.status}</Text></View>
+                    <View style={[styles.statusBadge, { backgroundColor: loan.status === 'Active' ? colors.successSoft : loan.status === 'Pending' ? colors.warmSurface : loan.status === 'Rejected' ? colors.destructiveSoft : colors.muted }]}><Text style={[styles.statusBadgeText, { color: loan.status === 'Active' ? colors.primary : loan.status === 'Pending' ? colors.accentForeground : loan.status === 'Rejected' ? colors.destructive : colors.mutedForeground }]}>{loan.status === 'Active' ? 'APPROVED' : loan.status === 'Paid off' ? 'REPAID' : loan.status.toUpperCase()}</Text></View>
                   </View>
                   <View style={styles.historyAmounts}>
-                    <View><Text style={[styles.historyAmountLabel, { color: colors.mutedForeground }]}>{loan.status === 'Pending' ? 'REQUESTED' : 'BORROWED'}</Text><Text style={[styles.historyAmountValue, { color: colors.foreground }]}>KES {loan.principal.toLocaleString()}</Text></View>
+                    <View><Text style={[styles.historyAmountLabel, { color: colors.mutedForeground }]}>{loan.status === 'Pending' || loan.status === 'Rejected' ? 'REQUESTED' : 'BORROWED'}</Text><Text style={[styles.historyAmountValue, { color: colors.foreground }]}>KES {(loan.status === 'Pending' || loan.status === 'Rejected' ? loan.requestedPrincipal : loan.principal).toLocaleString()}</Text></View>
                     <View><Text style={[styles.historyAmountLabel, { color: colors.mutedForeground }]}>REPAID</Text><Text style={[styles.historyAmountValue, { color: colors.foreground }]}>KES {tie.ledgerRepaid.toLocaleString()}</Text></View>
-                    <View style={{ alignItems: 'flex-end' }}><Text style={[styles.historyAmountLabel, { color: colors.mutedForeground }]}>BALANCE</Text><Text style={[styles.historyAmountValue, { color: colors.foreground }]}>KES {loan.balance.toLocaleString()}</Text></View>
+                    <View style={{ alignItems: 'flex-end' }}><Text style={[styles.historyAmountLabel, { color: colors.mutedForeground }]}>BALANCE</Text><Text style={[styles.historyAmountValue, { color: colors.foreground }]}>KES {(loan.status === 'Pending' || loan.status === 'Rejected' ? 0 : loan.balance).toLocaleString()}</Text></View>
                   </View>
                   <View style={[styles.loanTrack, { backgroundColor: colors.muted }]}><View style={[styles.loanFill, { width: `${progressOf(loan) * 100}%`, backgroundColor: colors.primary }]} /></View>
                   {loan.status === 'Active' && tie.difference !== 0 ? (
@@ -346,6 +391,12 @@ function LoanHistoryModal({ visible, loans, finance, onClose }: { visible: boole
 /** What the loan's own balance implies has been paid, against its agreed total,
  *  held between 0 and 1. A balance written above the total — which older records
  *  can hold — would otherwise give a bar a negative width. */
+function formatSubmittedAt(value: string) {
+  if (!value) return 'Date not recorded';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Date not recorded' : date.toLocaleString();
+}
+
 function progressOf(loan: Loan) {
   if (loan.totalPayable <= 0) return 0;
   const paid = Math.max(loan.totalPayable - loan.balance, 0);
@@ -435,32 +486,45 @@ function Reason({ icon, title, copy }: { icon: keyof typeof Feather.glyphMap; ti
   return <View style={[styles.reason, { borderBottomColor: colors.border }]}><View style={[styles.reasonIcon, { backgroundColor: colors.successSoft }]}><Feather name={icon} size={16} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={[styles.reasonTitle, { color: colors.foreground }]}>{title}</Text><Text style={[styles.reasonCopy, { color: colors.mutedForeground }]}>{copy}</Text></View></View>;
 }
 
-function LoanApplicationModal({ visible, onClose, onSave, circles, finance }: { visible: boolean; onClose: () => void; onSave: (amount: number, purpose: string, circleId?: string) => Promise<void>; circles: Circle[]; finance: Finance }) {
+function LoanApplicationModal({ visible, onClose, onSave, circles, finance, initialCircleId }: { visible: boolean; onClose: () => void; onSave: (amount: number, purpose: string, circleId: string, preferredMonths: number) => Promise<void>; circles: Circle[]; finance: Finance; initialCircleId?: string }) {
   const colors = useColors();
   const sheet = useSheet();
   const [amount, setAmount] = useState('');
   const [purpose, setPurpose] = useState('');
-  const [circleId, setCircleId] = useState<string | undefined>(undefined);
+  const [circleId, setCircleId] = useState<string | undefined>(initialCircleId);
+  const [preferredMonths, setPreferredMonths] = useState(6);
+  const [submitting, setSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
   React.useEffect(() => {
-    if (visible) setCircleId(circles[0]?.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
-  const selected = circles.find((item) => item.id === circleId) ?? circles[0];
+    if (visible) {
+      setCircleId(initialCircleId && circles.some((item) => item.id === initialCircleId) ? initialCircleId : circles[0]?.id);
+      setSubmissionError(null);
+    }
+  }, [visible, initialCircleId, circles]);
+  const selected = circles.find((item) => item.id === circleId) ?? circles.find((item) => item.id === initialCircleId) ?? circles[0];
   // The ceiling is one group's own cash — the same figure the API refuses a loan
   // above — not a credit score or a limit nobody can point at in the ledger.
   const ceiling = selected ? Math.max(finance.savedFor(selected.id), 0) : 0;
   const requested = Number(amount) || 0;
   const rate = selected?.loanInterestPercent ?? 5;
   const period = selected?.loanInterestPeriod ?? 'Month';
-  const quote = quoteLoan(requested, rate, period);
-  const valid = selected !== undefined && requested >= MIN_LOAN && requested <= ceiling && purpose.trim().length > 0;
+  const quote = quoteLoan(requested, rate, period, preferredMonths);
+  const valid = selected !== undefined && requested >= MIN_LOAN && requested <= ceiling && purpose.trim().length > 0 && !submitting;
   const submit = async () => {
-    if (!valid || !selected) return;
-    await onSave(requested, purpose, selected.id);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setAmount('');
-    setPurpose('');
-    onClose();
+    if (!valid || !selected || submitting) return;
+    setSubmitting(true);
+    setSubmissionError(null);
+    try {
+      await onSave(requested, purpose, selected.id, preferredMonths);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setAmount('');
+      setPurpose('');
+      onClose();
+    } catch (error) {
+      setSubmissionError(error instanceof Error ? error.message : 'Could not submit this application. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
   return (
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
@@ -500,6 +564,17 @@ function LoanApplicationModal({ visible, onClose, onSave, circles, finance }: { 
                 </View>
               </>
             ) : null}
+            <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Preferred repayment period</Text>
+            <View style={uiStyles.circlePicker}>
+              {[3, 6, 9, 12].map((months) => {
+                const active = months === preferredMonths;
+                return (
+                  <Pressable key={months} onPress={() => setPreferredMonths(months)} accessibilityRole="button" accessibilityState={{ selected: active }} style={[uiStyles.circleChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background }]}>
+                    <Text style={[uiStyles.circleChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{months} months</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
             <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Amount</Text>
             <View style={[styles.amountWrap, { backgroundColor: colors.background, borderColor: colors.border }]}>
               <Text style={[styles.currency, { color: colors.primary }]}>KES</Text>
@@ -510,22 +585,26 @@ function LoanApplicationModal({ visible, onClose, onSave, circles, finance }: { 
             <View style={[styles.feePreview, { backgroundColor: colors.successSoft }]}>
               <Feather name="percent" size={15} color={colors.primary} />
               <Text style={[styles.feePreviewText, { color: colors.primary }]}>
-                {selected ? `${selected.name} lends at ${interestLabel(rate, period)}, compounded over ${quote.months} months` : `No group yet · ${interestLabel(rate, period)} applies`}
+                {selected ? `${selected.name} lends at ${interestLabel(rate, period)}, compounded over ${quote.months} months` : 'Choose a circle'}
                 {requested >= MIN_LOAN ? ` · you would repay KES ${quote.totalPayable.toLocaleString()}: KES ${quote.monthlyRepayment.toLocaleString()} a month, then KES ${quote.finalRepayment.toLocaleString()} at the end` : ''}
               </Text>
             </View>
             <Text style={[styles.validation, { color: colors.destructive }]}>
               {requested > ceiling ? `${selected?.name ?? 'That group'} holds KES ${ceiling.toLocaleString()}. A loan above that would leave its balance describing cash nobody can pay out.` : ''}
             </Text>
+            {submissionError ? <Text testID="loan-application-error" style={[styles.validation, { color: colors.destructive }]}>{submissionError}</Text> : null}
             <Text style={[styles.pendingNote, { color: colors.mutedForeground }]}>
               An admin of {selected?.name ?? 'your group'} approves this request before any money moves. Until then it
               is a question, not a debt.
             </Text>
             <View style={styles.modalActions}>
-              <Pressable onPress={onClose} style={[styles.cancelButton, { borderColor: colors.border }]}>
+              <Pressable disabled={submitting} onPress={onClose} style={[styles.cancelButton, { borderColor: colors.border, opacity: submitting ? 0.6 : 1 }]}>
                 <Text style={[styles.cancelText, { color: colors.inkSoft }]}>Cancel</Text>
               </Pressable>
-              <View style={{ flex: 1 }}><PrimaryButton label="Review request" icon="arrow-right" onPress={submit} /></View>
+              <Pressable testID="submit-loan-application" accessibilityRole="button" accessibilityState={{ disabled: !valid }} disabled={!valid} onPress={submit} style={({ pressed }) => [styles.submitApplication, { backgroundColor: colors.primary, opacity: !valid || pressed ? 0.6 : 1 }]}>
+                {submitting ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Feather name="arrow-right" size={15} color={colors.primaryForeground} />}
+                <Text style={[styles.submitApplicationText, { color: colors.primaryForeground }]}>{submitting ? 'Submitting…' : 'Review request'}</Text>
+              </Pressable>
             </View>
           </ScrollView>
         </View>
@@ -673,6 +752,15 @@ const styles = StyleSheet.create({
   adminReviewBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 8.5, letterSpacing: 0.8 },
   approveActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 10 },
   loanDecisionActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  reviewFields: { marginTop: 12, gap: 4 },
+  reviewTermsRow: { flexDirection: 'row', gap: 10 },
+  reviewInput: { minHeight: 48, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontFamily: 'Inter_500Medium', fontSize: 13 },
+  rejectionInput: { minHeight: 76, textAlignVertical: 'top' },
+  reviewActionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  reviewOpenButton: { minHeight: 42, borderWidth: 1, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 10 },
+  reviewOpenText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  submitApplication: { minHeight: 49, flex: 1, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12 },
+  submitApplicationText: { fontFamily: 'Inter_700Bold', fontSize: 13 },
   approveActionText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   adminQueueClear: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 14, padding: 13, marginBottom: 10 },
   adminQueueText: { fontFamily: 'Inter_500Medium', fontSize: 12, flex: 1, lineHeight: 17 },

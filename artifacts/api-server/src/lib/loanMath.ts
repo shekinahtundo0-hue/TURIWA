@@ -40,15 +40,21 @@ export function dueAfterMonths(months: number, from = new Date()): Date {
 
 /** Compound interest: each month the outstanding balance grows by the monthly rate
  *  before the next month starts, so the borrower pays interest on interest. */
-export function quoteLoan(principal: number, percent: number, period: InterestPeriod): LoanQuote {
+export function quoteLoan(
+  principal: number,
+  percent: number,
+  period: InterestPeriod,
+  months = LOAN_MONTHS,
+): LoanQuote {
   const rate = monthlyRate(percent, period);
-  const totalPayable = Math.round(principal * Math.pow(1 + rate, LOAN_MONTHS));
-  const monthlyRepayment = Math.ceil(totalPayable / LOAN_MONTHS);
+  const term = [3, 6, 9, 12].includes(months) ? months : LOAN_MONTHS;
+  const totalPayable = Math.round(principal * Math.pow(1 + rate, term));
+  const monthlyRepayment = Math.ceil(totalPayable / term);
   return {
     totalPayable,
     monthlyRepayment,
-    finalRepayment: totalPayable - monthlyRepayment * (LOAN_MONTHS - 1),
+    finalRepayment: totalPayable - monthlyRepayment * (term - 1),
     interest: totalPayable - principal,
-    months: LOAN_MONTHS,
+    months: term,
   };
 }

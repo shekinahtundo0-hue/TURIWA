@@ -24,8 +24,7 @@ export default function CirclesScreen() {
     setCircleFine,
     applyFine,
     addContribution,
-    approveLoan,
-    rejectLoan,
+    removeCircleMember,
     refresh,
     refreshing,
   } = useTuriwa();
@@ -120,14 +119,19 @@ export default function CirclesScreen() {
         loans={loans}
         isAdmin={activeCircle ? isAdmin(activeCircle) : false}
         isCoAdmin={activeCircle ? isCoAdmin(activeCircle) : false}
+        currentUserId={user?.id}
         onClose={() => setDetailCircleId(null)}
         onContribute={openContribute}
-        onApproveLoan={async (loanId) => {
-          await approveLoan(loanId);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        onApplyLoan={(circleId) => {
+          setDetailCircleId(null);
+          router.push({ pathname: '/loans', params: { circleId } });
         }}
-        onRejectLoan={async (loanId) => {
-          await rejectLoan(loanId);
+        onReviewLoans={() => {
+          setDetailCircleId(null);
+          router.push('/loans');
+        }}
+        onRemoveCircleMember={async (circleId, memberId) => {
+          await removeCircleMember(circleId, memberId);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }}
         canDeleteCircle={circles.length > 1}

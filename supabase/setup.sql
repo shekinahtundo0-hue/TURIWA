@@ -37,14 +37,42 @@ create table if not exists public.contributions (
 
 create table if not exists public.loans (
   id text primary key,
+  user_id text,
+  circle_id text,
   principal integer not null,
+  requested_principal integer not null default 0,
   balance integer not null,
   monthly_repayment integer not null,
+  total_payable integer not null default 0,
+  months integer not null default 6,
+  requested_months integer not null default 6,
   interest_rate integer not null,
+  interest_period text not null default 'Month',
   due_date text not null,
+  due_on text,
   purpose text not null,
-  status text not null
+  status text not null,
+  submitted_at timestamptz not null default now(),
+  reviewed_by text,
+  reviewed_at timestamptz,
+  rejection_reason text
 );
+
+-- Additive upgrades keep existing loan records while enabling review history.
+alter table public.loans add column if not exists user_id text;
+alter table public.loans add column if not exists circle_id text;
+alter table public.loans add column if not exists requested_principal integer not null default 0;
+alter table public.loans add column if not exists total_payable integer not null default 0;
+alter table public.loans add column if not exists months integer not null default 6;
+alter table public.loans add column if not exists requested_months integer not null default 6;
+alter table public.loans add column if not exists interest_period text not null default 'Month';
+alter table public.loans add column if not exists due_on text;
+alter table public.loans add column if not exists submitted_at timestamptz not null default now();
+alter table public.loans add column if not exists reviewed_by text;
+alter table public.loans add column if not exists reviewed_at timestamptz;
+alter table public.loans add column if not exists rejection_reason text;
+update public.loans set requested_principal = principal where requested_principal = 0;
+update public.loans set total_payable = greatest(monthly_repayment * months, principal) where total_payable = 0;
 
 create table if not exists public.app_meta (
   key text primary key,

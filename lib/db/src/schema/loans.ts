@@ -1,4 +1,4 @@
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import type { InterestPeriod } from "./circles";
 
 export const loansTable = pgTable("loans", {
@@ -9,12 +9,14 @@ export const loansTable = pgTable("loans", {
   // decides on the request, so a loan without this link belongs to nobody's ledger.
   circleId: text("circle_id"),
   principal: integer("principal").notNull(),
+  requestedPrincipal: integer("requested_principal").notNull().default(0),
   balance: integer("balance").notNull(),
   monthlyRepayment: integer("monthly_repayment").notNull(),
   // What the loan grows to by the end of its term. Stored rather than re-derived,
   // because the group is free to change its rate after the money is lent.
   totalPayable: integer("total_payable").notNull(),
   months: integer("months").notNull(),
+  requestedMonths: integer("requested_months").notNull().default(6),
   interestRate: integer("interest_rate").notNull(),
   interestPeriod: text("interest_period").$type<InterestPeriod>().notNull().default("Month"),
   dueDate: text("due_date").notNull(),
@@ -25,6 +27,10 @@ export const loansTable = pgTable("loans", {
   dueOn: text("due_on"),
   purpose: text("purpose").notNull(),
   status: text("status").notNull(),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  rejectionReason: text("rejection_reason"),
 });
 
 export type Loan = typeof loansTable.$inferSelect;

@@ -64,7 +64,7 @@ async function circleForMember(userId: string, circleId: string) {
   if (!circle) return undefined;
   if (circle.createdBy === userId) return circle;
   const member = circle.membersList?.find(
-    (entry) => entry.id === userId && entry.status !== "pending",
+    (entry) => entry.id === userId && (entry.status ?? "active") === "active",
   );
   return member ? circle : undefined;
 }
@@ -75,7 +75,7 @@ function canManageCircle(circle: NonNullable<Awaited<ReturnType<typeof circleFor
     circle.membersList?.some(
       (member) =>
         member.id === userId &&
-        member.status !== "pending" &&
+        (member.status ?? "active") === "active" &&
         (member.role === "admin" || member.role === "co-admin"),
     ) === true
   );
@@ -239,9 +239,12 @@ router.post("/circles/join", requireAuth, async (req, res) => {
 
     const roster = circle.membersList ?? [];
     const existing = roster.find((member) => member.id === userId);
-    if (existing && existing.status !== "pending") return { circleId: circle.id };
+    if (existing && (existing.status ?? "active") === "active") return { circleId: circle.id };
+    if (existing?.status === "removed") {
+      return { error: "This account was removed from the circle. Ask an admin to restore membership.", status: 403 };
+    }
 
-    const activeCount = roster.filter((member) => member.status !== "pending").length;
+    const activeCount = roster.filter((member) => (member.status ?? "active") === "active").length;
     if (activeCount >= 100) {
       return { error: "This circle is full. Ask the admin before trying again.", status: 409 };
     }
@@ -270,6 +273,75 @@ router.post("/circles/join", requireAuth, async (req, res) => {
     return { circleId: circle.id };
   });
 
+  if ("error" in result) {
+    res.status(result.status ?? 400).json({ message: result.error });
+    return;
+  }
+  res.json(await publishState(userId));
+});
+
+router.delete("/circles/:id/members/:memberId", requireAuth, async (req, res) => {
+  const userId = userIdOf(req);
+  const circleId = String(req.params.id);
+  const memberId = String(req.params.memberId);
+  const result = await getDb().transaction(async (tx) => {
+    const [circle] = await tx
+      .select()
+      .from(circlesTable)
+      .where(eq(circlesTable.id, circleId))
+      .for("update")
+      .limit(1);
+    if (!circle) return { error: "That circle could not be found.", status: 404 as const };
+    if (!canManageCircle(circle, userId)) {
+      return { error: "Only an active circle admin can remove members.", status: 403 as const };
+    }
+    const roster = circle.membersList ?? [];
+    const target = roster.find((member) => member.id === memberId && (member.status ?? "active") === "active");
+    if (!target) return { error: "That person is not an active member of this circle.", status: 404 as const };
+
+    const isPrimaryAdmin = target.id === circle.createdBy || target.role === "admin";
+    if (isPrimaryAdmin && target.id !== userId) {
+      return { error: "The primary admin cannot be removed by another member.", status: 409 as const };
+    }
+    if (target.role === "co-admin" && userId !== circle.createdBy) {
+      return { error: "Only the primary admin can remove another circle admin.", status: 403 as const };
+    }
+
+    let nextCreatedBy = circle.createdBy;
+    let promotedId: string | null = null;
+    if (target.id === circle.createdBy) {
+      const replacement = roster.find(
+        (member) => member.id !== target.id && (member.status ?? "active") === "active" && member.role === "co-admin",
+      );
+      if (!replacement) {
+        return { error: "Assign an active co-admin before leaving this circle so it keeps an administrator.", status: 409 as const };
+      }
+      promotedId = replacement.id;
+      nextCreatedBy = replacement.id;
+    }
+
+    const now = new Date().toISOString();
+    const nextRoster = roster.map((member) => {
+      if (member.id === target.id) {
+        return { ...member, status: "removed" as const, removedAt: now, removedBy: userId };
+      }
+      if (member.id === promotedId) return { ...member, role: "admin" as const };
+      return member;
+    });
+    const members = nextRoster.filter((member) => (member.status ?? "active") === "active").length;
+    const remainingAdmins = nextRoster.filter(
+      (member) => (member.status ?? "active") === "active" &&
+        (member.id === nextCreatedBy || member.role === "admin" || member.role === "co-admin"),
+    );
+    if (remainingAdmins.length === 0) {
+      return { error: "A circle must keep at least one active admin.", status: 409 as const };
+    }
+    await tx
+      .update(circlesTable)
+      .set({ membersList: nextRoster, members, createdBy: nextCreatedBy })
+      .where(eq(circlesTable.id, circleId));
+    return { ok: true as const, removedName: target.name };
+  });
   if ("error" in result) {
     res.status(result.status ?? 400).json({ message: result.error });
     return;
@@ -310,7 +382,7 @@ router.post("/circles/:id/fines", requireAuth, async (req, res) => {
     return;
   }
   const memberId = String(req.body?.memberId ?? "");
-  const member = (circle.membersList ?? []).find((entry) => entry.id === memberId && entry.status !== "pending");
+  const member = (circle.membersList ?? []).find((entry) => entry.id === memberId && (entry.status ?? "active") === "active");
   if (!member) {
     res.status(404).json({ message: "That member is not on this group's roster." });
     return;
@@ -401,7 +473,7 @@ router.delete("/circles/:id", requireAuth, async (req, res) => {
 router.post("/loans", requireAuth, async (req, res) => {
   const userId = userIdOf(req);
   const amount = Number(req.body?.amount);
-  const purpose = String(req.body?.purpose ?? "Personal need").trim().slice(0, 120) || "Personal need";
+  const purpose = String(req.body?.purpose ?? "").trim().slice(0, 120);
   const circleId = String(req.body?.circleId ?? "").slice(0, 80);
   if (!Number.isFinite(amount) || amount <= 0) {
     res.status(400).json({ message: "Enter a valid loan amount." });
@@ -416,51 +488,82 @@ router.post("/loans", requireAuth, async (req, res) => {
     return;
   }
 
-  // A member borrows through a group, and that group sets its own rate.
-  const circle = circleId ? await circleForMember(userId, circleId) : undefined;
-  if (circleId && !circle) {
-    res.status(403).json({ message: "That group belongs to another account." });
+  if (!purpose) {
+    res.status(400).json({ message: "Explain what the loan is for." });
     return;
   }
-  const principal = Math.round(amount);
-  if (circle) {
-    // The fund cannot hand over cash it does not hold. This is the same figure the
-    // app shows as what it can lend, so the ceiling on screen is the ceiling here.
+  if (!circleId) {
+    res.status(400).json({ message: "Choose a circle to apply through." });
+    return;
+  }
+  const preferredMonths = Number(req.body?.preferredMonths ?? LOAN_MONTHS);
+  if (![3, 6, 9, 12].includes(preferredMonths)) {
+    res.status(400).json({ message: "Choose a repayment period of 3, 6, 9, or 12 months." });
+    return;
+  }
+  // Locking the circle serializes applications from one member and lets the duplicate
+  // pending check below reliably stop a fast double submit on another device too.
+  const db = getDb();
+  const result = await db.transaction(async (tx) => {
+    const [circle] = await tx
+      .select()
+      .from(circlesTable)
+      .where(eq(circlesTable.id, circleId))
+      .for("update")
+      .limit(1);
+    if (!circle) return { error: "That circle could not be found.", status: 404 as const };
+    if (circle.createdBy !== userId && !circle.membersList?.some(
+      (member) => member.id === userId && (member.status ?? "active") === "active",
+    )) {
+      return { error: "Join this circle before applying for one of its loans.", status: 403 as const };
+    }
+    const [existing] = await tx
+      .select({ id: loansTable.id })
+      .from(loansTable)
+      .where(and(
+        eq(loansTable.userId, userId),
+        eq(loansTable.circleId, circleId),
+        eq(loansTable.status, "Pending"),
+      ))
+      .limit(1);
+    if (existing) return { error: "You already have a pending application in this circle.", status: 409 as const };
+
+    const principal = Math.round(amount);
     const cash = await circleCash(circle.id);
     if (principal > cash) {
-      res.status(400).json({
-        message: `${circle.name} holds ${kes(cash)}. A loan cannot be larger than the money the group has, or its balance would describe cash nobody can pay out.`,
-      });
-      return;
+      return {
+        error: `${circle.name} holds ${kes(cash)}. A loan cannot be larger than the money the group has.`,
+        status: 400 as const,
+      };
     }
+    const interestRate = circle.loanInterestPercent ?? 5;
+    const interestPeriod = asInterestPeriod(circle.loanInterestPeriod);
+    const quote = quoteLoan(principal, interestRate, interestPeriod, preferredMonths);
+    const due = dueAfterMonths(quote.months);
+    await tx.insert(loansTable).values({
+      id: newId("loan"),
+      userId,
+      circleId: circle.id,
+      principal,
+      requestedPrincipal: principal,
+      balance: quote.totalPayable,
+      monthlyRepayment: quote.monthlyRepayment,
+      totalPayable: quote.totalPayable,
+      months: quote.months,
+      requestedMonths: quote.months,
+      interestRate,
+      interestPeriod,
+      dueDate: formatDay(due),
+      dueOn: isoDay(due),
+      purpose,
+      status: "Pending",
+    });
+    return { ok: true as const };
+  });
+  if ("error" in result) {
+    res.status(result.status ?? 400).json({ message: result.error });
+    return;
   }
-  const interestRate = circle?.loanInterestPercent ?? 5;
-  const interestPeriod = asInterestPeriod(circle?.loanInterestPeriod);
-  const quote = quoteLoan(principal, interestRate, interestPeriod);
-  // The term is in months, so the due date is counted in months from the day the money
-  // moves. A fixed 183 days is not six of them.
-  const due = dueAfterMonths(quote.months);
-  const dueDate = formatDay(due);
-  const db = getDb();
-  const loan = {
-    id: newId("loan"),
-    userId,
-    circleId: circle?.id ?? null,
-    principal,
-    balance: quote.totalPayable,
-    monthlyRepayment: quote.monthlyRepayment,
-    totalPayable: quote.totalPayable,
-    months: quote.months,
-    interestRate,
-    interestPeriod,
-    dueDate,
-    dueOn: isoDay(due),
-    purpose,
-    // A request is not money the fund has moved. It becomes an active loan — and a
-    // disbursement in the ledger — when the group's admin approves it.
-    status: "Pending",
-  };
-  await db.insert(loansTable).values(loan);
   res.status(201).json(await publishState(userId));
 });
 
@@ -514,8 +617,7 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
   const userId = userIdOf(req);
   const db = getDb();
   const loanId = String(req.params.id);
-  // Group requests are decided by an active circle admin; standalone loans remain
-  // private to their owner.
+  // Only an independent, active admin of the applicant's group may decide a request.
   const [loan] = await db
     .select()
     .from(loansTable)
@@ -525,14 +627,17 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
     res.status(404).json({ message: "That loan is not on your record." });
     return;
   }
-  if (loan.circleId) {
-    const circle = await circleForMember(userId, loan.circleId);
-    if (!circle || !canManageCircle(circle, userId)) {
-      res.status(403).json({ message: "Only this circle's admin can approve its loan requests." });
-      return;
-    }
-  } else if (loan.userId !== userId) {
-    res.status(404).json({ message: "That loan is not on your record." });
+  if (!loan.circleId) {
+    res.status(403).json({ message: "A loan request must belong to a circle with an independent admin reviewer." });
+    return;
+  }
+  const circle = await circleForMember(userId, loan.circleId);
+  if (!circle || !canManageCircle(circle, userId)) {
+    res.status(403).json({ message: "Only this circle's admin can approve its loan requests." });
+    return;
+  }
+  if (loan.userId === userId) {
+    res.status(403).json({ message: "You cannot approve your own loan application. Another circle admin must review it." });
     return;
   }
   // Approval decides once. Re-approving a loan already running — or already paid —
@@ -542,27 +647,53 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
       message:
         loan.status === "Paid off"
           ? "This loan is already paid off."
-          : "This loan is already approved and running.",
+          : loan.status === "Rejected"
+            ? "This loan request was already rejected."
+            : "This loan is already approved and running.",
     });
     return;
   }
-  // The term runs from the day the money is handed over, not the day it was asked
-  // for, so an approval a week late moves the due date with it.
-  const due = dueAfterMonths(loan.months);
-  if (loan.circleId) {
-    // The fund may have spent the money since the request arrived. Approval is when
-    // cash actually leaves, so this is where the ceiling is enforced for real.
-    const cash = await circleCash(loan.circleId);
-    if (loan.principal > cash) {
-      res.status(400).json({
-        message: `The group holds ${kes(cash)}, which is less than the ${kes(loan.principal)} this loan would hand over. Approving it would put the ledger below the cash anyone can pay out.`,
-      });
-      return;
-    }
+  const amount = Number(req.body?.amount ?? loan.requestedPrincipal ?? loan.principal);
+  const months = Number(req.body?.months ?? loan.requestedMonths ?? loan.months);
+  const interestRate = Number(req.body?.interestRate ?? loan.interestRate);
+  if (!Number.isInteger(amount) || amount < MIN_LOAN || amount > MAX_KES) {
+    res.status(400).json({ message: `Approved amount must be a whole amount between ${kes(MIN_LOAN)} and ${kes(MAX_KES)}.` });
+    return;
   }
+  if (![3, 6, 9, 12].includes(months)) {
+    res.status(400).json({ message: "Choose an approved repayment period of 3, 6, 9, or 12 months." });
+    return;
+  }
+  if (!Number.isInteger(interestRate) || interestRate < 0 || interestRate > 100) {
+    res.status(400).json({ message: "Interest must be a whole percentage between 0 and 100." });
+    return;
+  }
+  const cash = await circleCash(circle.id);
+  if (amount > cash) {
+    res.status(400).json({
+      message: `The group holds ${kes(cash)}, which is less than the ${kes(amount)} this loan would hand over.`,
+    });
+    return;
+  }
+  const quote = quoteLoan(amount, interestRate, asInterestPeriod(loan.interestPeriod), months);
+  // The term runs from the day the money is handed over, not the day it was applied.
+  const due = dueAfterMonths(quote.months);
   const changed = await db
     .update(loansTable)
-    .set({ status: "Active", dueDate: formatDay(due), dueOn: isoDay(due) })
+    .set({
+      principal: amount,
+      balance: quote.totalPayable,
+      monthlyRepayment: quote.monthlyRepayment,
+      totalPayable: quote.totalPayable,
+      months: quote.months,
+      interestRate,
+      status: "Active",
+      dueDate: formatDay(due),
+      dueOn: isoDay(due),
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      rejectionReason: null,
+    })
     .where(and(eq(loansTable.id, loanId), eq(loansTable.status, "Pending")))
     .returning({ id: loansTable.id });
   if (changed.length === 0) {
@@ -571,7 +702,21 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
   }
   // Approval is the moment the fund hands the money over, so it is the moment the
   // ledger records it.
-  await recordLoanDisbursement({ ...loan, status: "Active" }, "Just now");
+  await recordLoanDisbursement({
+    ...loan,
+    principal: amount,
+    balance: quote.totalPayable,
+    monthlyRepayment: quote.monthlyRepayment,
+    totalPayable: quote.totalPayable,
+    months: quote.months,
+    interestRate,
+    dueDate: formatDay(due),
+    dueOn: isoDay(due),
+    reviewedBy: userId,
+    reviewedAt: new Date(),
+    rejectionReason: null,
+    status: "Active",
+  }, "Just now");
   res.json(await publishState(userId));
 });
 
@@ -579,6 +724,11 @@ router.post("/loans/:id/reject", requireAuth, async (req, res) => {
   const userId = userIdOf(req);
   const db = getDb();
   const loanId = String(req.params.id);
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 300);
+  if (reason.length < 5) {
+    res.status(400).json({ message: "Add a rejection reason of at least 5 characters." });
+    return;
+  }
   const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId)).limit(1);
   if (!loan) {
     res.status(404).json({ message: "That loan request could not be found." });
@@ -593,13 +743,17 @@ router.post("/loans/:id/reject", requireAuth, async (req, res) => {
     res.status(403).json({ message: "Only this circle's admin can reject its loan requests." });
     return;
   }
+  if (loan.userId === userId) {
+    res.status(403).json({ message: "You cannot reject your own loan application. Another circle admin must review it." });
+    return;
+  }
   if (loan.status !== "Pending") {
     res.status(409).json({ message: "Only a pending loan request can be rejected." });
     return;
   }
   const changed = await db
     .update(loansTable)
-    .set({ status: "Rejected" })
+    .set({ status: "Rejected", reviewedBy: userId, reviewedAt: new Date(), rejectionReason: reason })
     .where(and(eq(loansTable.id, loanId), eq(loansTable.status, "Pending")))
     .returning({ id: loansTable.id });
   if (changed.length === 0) {

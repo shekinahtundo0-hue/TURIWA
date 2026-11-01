@@ -5,7 +5,7 @@ import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, Share,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useResponsive } from '@/hooks/useResponsive';
-import { cycleNoun, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type Circle, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
+import { cycleNoun, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type Circle, type CircleMember, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
 
 // "3 two-week cycles", "1 month", "5 weeks" - the pace copy has to read well for
 // every frequency the group sets.
@@ -569,14 +569,16 @@ export function CircleDetailModal({
   loans = [],
   isAdmin = false,
   isCoAdmin = false,
+  currentUserId,
   onContribute,
-  onApproveLoan,
-  onRejectLoan,
+  onApplyLoan,
+  onReviewLoans,
   onAssignCoAdmin,
   onRemoveCoAdmin,
   onAddMember,
   canDeleteCircle = false,
   onDeleteCircle,
+  onRemoveCircleMember,
   onSetFine,
   onApplyFine,
 }: {
@@ -587,9 +589,10 @@ export function CircleDetailModal({
   loans?: Loan[];
   isAdmin?: boolean;
   isCoAdmin?: boolean;
+  currentUserId?: string;
   onContribute?: (circleId: string) => void;
-  onApproveLoan?: (loanId: string) => Promise<void>;
-  onRejectLoan?: (loanId: string) => Promise<void>;
+  onApplyLoan?: (circleId: string) => void;
+  onReviewLoans?: (circleId: string) => void;
   onAssignCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onRemoveCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onAddMember?: (circleId: string, name: string, phone?: string) => Promise<{ success: boolean; message: string }>;
@@ -597,6 +600,7 @@ export function CircleDetailModal({
    *  delete the only one, so the control says that instead of offering it. */
   canDeleteCircle?: boolean;
   onDeleteCircle?: (circleId: string) => Promise<void>;
+  onRemoveCircleMember?: (circleId: string, memberId: string) => Promise<void>;
   /** Saves the admin's fine rule. It charges nobody; it only sets what a fine costs. */
   onSetFine?: (circleId: string, amount: number) => Promise<void>;
   /** Records one fine against a member who has not paid the current cycle. */
@@ -609,9 +613,9 @@ export function CircleDetailModal({
   const [newMemberName, setNewMemberName] = React.useState('');
   const [newMemberPhone, setNewMemberPhone] = React.useState('');
   const [memberActionFeedback, setMemberActionFeedback] = React.useState<string | null>(null);
-  const [approvalFeedback, setApprovalFeedback] = React.useState<{ message: string; failed: boolean } | null>(null);
-  const [approvingLoanId, setApprovingLoanId] = React.useState<string | null>(null);
-  const [rejectingLoanId, setRejectingLoanId] = React.useState<string | null>(null);
+  const [memberToRemove, setMemberToRemove] = React.useState<CircleMember | null>(null);
+  const [removingMember, setRemovingMember] = React.useState(false);
+  const [removeMemberError, setRemoveMemberError] = React.useState<string | null>(null);
   const [deleteVisible, setDeleteVisible] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
@@ -651,37 +655,19 @@ export function CircleDetailModal({
   const lateMembers = membersList.filter((member) => member.status === 'active' && member.lateThisPeriod);
   const cycle = cycleNoun(circle.frequency);
 
-  const handleApproveLoan = async (loanId: string) => {
-    if (!onApproveLoan || approvingLoanId) return;
-    setApprovingLoanId(loanId);
+  const handleRemoveCircleMember = async () => {
+    if (!memberToRemove || !onRemoveCircleMember || removingMember) return;
+    setRemovingMember(true);
+    setRemoveMemberError(null);
     try {
-      await onApproveLoan(loanId);
-      setApprovalFeedback({ message: 'Loan approved — it now counts against the group.', failed: false });
+      await onRemoveCircleMember(circle.id, memberToRemove.id);
+      setMemberActionFeedback(`${memberToRemove.name} was removed. Their historical records remain saved.`);
+      setMemberToRemove(null);
+      setTimeout(() => setMemberActionFeedback(null), 4000);
     } catch (error) {
-      setApprovalFeedback({
-        message: error instanceof Error ? error.message : 'Could not approve that loan. Check the amount and try again.',
-        failed: true,
-      });
+      setRemoveMemberError(error instanceof Error ? error.message : 'Could not remove this member. Try again.');
     } finally {
-      setApprovingLoanId(null);
-      setTimeout(() => setApprovalFeedback(null), 4000);
-    }
-  };
-
-  const handleRejectLoan = async (loanId: string) => {
-    if (!onRejectLoan || approvingLoanId || rejectingLoanId) return;
-    setRejectingLoanId(loanId);
-    try {
-      await onRejectLoan(loanId);
-      setApprovalFeedback({ message: 'Loan request rejected. No money moved from the group.', failed: false });
-    } catch (error) {
-      setApprovalFeedback({
-        message: error instanceof Error ? error.message : 'Could not reject that loan request. Try again.',
-        failed: true,
-      });
-    } finally {
-      setRejectingLoanId(null);
-      setTimeout(() => setApprovalFeedback(null), 4000);
+      setRemovingMember(false);
     }
   };
 
@@ -892,25 +878,6 @@ export function CircleDetailModal({
             </View>
 
             {/* Action Feedback Banner */}
-            {approvalFeedback ? (
-              <View
-                style={[
-                  styles.feedbackBanner,
-                  approvalFeedback.failed
-                    ? { backgroundColor: colors.destructiveSoft, borderColor: colors.destructive }
-                    : { backgroundColor: colors.successSoft, borderColor: colors.success },
-                ]}
-              >
-                <Feather
-                  name={approvalFeedback.failed ? 'alert-circle' : 'check-circle'}
-                  size={14}
-                  color={approvalFeedback.failed ? colors.destructive : colors.success}
-                />
-                <Text style={[styles.feedbackText, { color: approvalFeedback.failed ? colors.destructive : colors.success }]}>
-                  {approvalFeedback.message}
-                </Text>
-              </View>
-            ) : null}
             {memberActionFeedback ? (
               <View style={[styles.feedbackBanner, { backgroundColor: colors.successSoft, borderColor: colors.success }]}>
                 <Feather name="check-circle" size={14} color={colors.success} />
@@ -918,7 +885,25 @@ export function CircleDetailModal({
               </View>
             ) : null}
 
-            {/* Pending Loan Approvals Section (Admin & Co-Admin only) */}
+            <View style={styles.circleLoanSection}>
+              <Text style={[styles.inputLabel, { color: colors.inkSoft, marginTop: 0 }]}>Circle loans</Text>
+              <Text style={[styles.modalHint, { color: colors.mutedForeground, marginBottom: 10 }]}>
+                Active members, including admins, can apply. Requests stay pending until another circle admin reviews them.
+              </Text>
+              {onApplyLoan ? (
+                <Pressable
+                  testID={`apply-circle-loan-${circle.id}`}
+                  accessibilityRole="button"
+                  onPress={() => onApplyLoan(circle.id)}
+                  style={({ pressed }) => [styles.addMemberBtn, { backgroundColor: colors.successSoft, borderColor: colors.border, opacity: pressed ? 0.75 : 1 }]}
+                >
+                  <Feather name="plus-circle" size={14} color={colors.primary} />
+                  <Text style={[styles.addMemberBtnText, { color: colors.primary }]}>Apply for a loan</Text>
+                </Pressable>
+              ) : null}
+            </View>
+
+            {/* Pending Loan Applications Section (Admin & Co-Admin only) */}
             {hasAdminRights && pendingLoans.length > 0 ? (
               <View style={styles.approvalsSection}>
                 <View style={styles.sectionHeaderRow}>
@@ -934,46 +919,24 @@ export function CircleDetailModal({
                   <View key={loan.id} style={[styles.approvalCard, { backgroundColor: colors.background, borderColor: colors.goldBorder }]}>
                     <View style={styles.approvalTop}>
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.approvalBorrower, { color: colors.foreground }]}>{loan.purpose}</Text>
+                        <Text style={[styles.approvalBorrower, { color: colors.foreground }]}>{loan.applicantName} · {loan.purpose}</Text>
                         <Text style={[styles.approvalMeta, { color: colors.mutedForeground }]}>
-                          Requested: KES {loan.principal.toLocaleString()} · {interestLabel(loan.interestRate, loan.interestPeriod)} · Repay: KES {loan.monthlyRepayment.toLocaleString()}/mo
+                          Requested KES {loan.requestedPrincipal.toLocaleString()} · {loan.requestedMonths} months · Applied {new Date(loan.submittedAt).toLocaleDateString()}
                         </Text>
-                      </View>
-                      <View style={styles.loanDecisionActions}>
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={`Reject ${loan.purpose}`}
-                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
-                          onPress={() => handleRejectLoan(loan.id)}
-                          style={({ pressed }) => [
-                            styles.approveButton,
-                            { backgroundColor: colors.destructiveSoft, opacity: rejectingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
-                          ]}
-                        >
-                          <Feather name={rejectingLoanId === loan.id ? 'clock' : 'x'} size={14} color={colors.destructive} />
-                          <Text style={[styles.approveButtonText, { color: colors.destructive }]}>
-                            {rejectingLoanId === loan.id ? 'Rejecting' : 'Reject'}
-                          </Text>
-                        </Pressable>
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={`Approve ${loan.purpose}`}
-                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
-                          onPress={() => handleApproveLoan(loan.id)}
-                          style={({ pressed }) => [
-                            styles.approveButton,
-                            { backgroundColor: colors.primary, opacity: approvingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
-                          ]}
-                        >
-                          <Feather name={approvingLoanId === loan.id ? 'clock' : 'check'} size={14} color={colors.primaryForeground} />
-                          <Text style={[styles.approveButtonText, { color: colors.primaryForeground }]}>
-                            {approvingLoanId === loan.id ? 'Approving' : 'Approve'}
-                          </Text>
-                        </Pressable>
                       </View>
                     </View>
                   </View>
                 ))}
+                {onReviewLoans ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => onReviewLoans(circle.id)}
+                    style={({ pressed }) => [styles.addMemberBtn, { backgroundColor: colors.goldSoft, borderColor: colors.goldBorder, opacity: pressed ? 0.75 : 1 }]}
+                  >
+                    <Feather name="search" size={14} color={colors.accentForeground} />
+                    <Text style={[styles.addMemberBtnText, { color: colors.accentForeground }]}>Review applications in Loans</Text>
+                  </Pressable>
+                ) : null}
               </View>
             ) : null}
 
@@ -981,7 +944,7 @@ export function CircleDetailModal({
             <View style={styles.membersSection}>
               <View style={styles.sectionHeaderRow}>
                 <Text style={[styles.inputLabel, { color: colors.inkSoft, marginTop: 0 }]}>
-                  Circle Members ({membersList.length})
+                  Circle Members ({membersList.filter((member) => member.status === 'active').length})
                 </Text>
                 {isCircleAdmin && onAddMember ? (
                   <Pressable
@@ -1006,6 +969,10 @@ export function CircleDetailModal({
               {membersList.map((m) => {
                 const isAdminMember = m.role === 'admin';
                 const isCoAdminMember = m.role === 'co-admin';
+                const isRemovedMember = m.status === 'removed';
+                const canRemoveMember = hasAdminRights && m.status === 'active' &&
+                  (m.id !== circle.createdBy || (m.id === currentUserId && coAdminsCount > 0)) &&
+                  (!isCoAdminMember || isCircleAdmin);
                 const initials = m.name
                   .split(' ')
                   .map((p) => p[0])
@@ -1039,7 +1006,11 @@ export function CircleDetailModal({
                         <Text style={[styles.memberName, { color: colors.foreground }]} numberOfLines={1}>
                           {m.name}
                         </Text>
-                        {isAdminMember ? (
+                        {isRemovedMember ? (
+                          <View style={[styles.roleBadge, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+                            <Text style={[styles.roleBadgeText, { color: colors.mutedForeground }]}>REMOVED</Text>
+                          </View>
+                        ) : isAdminMember ? (
                           <View style={[styles.roleBadge, { backgroundColor: colors.goldSoft, borderColor: colors.gold }]}>
                             <MaterialCommunityIcons name="crown" size={10} color={colors.accentForeground} style={{ marginRight: 2 }} />
                             <Text style={[styles.roleBadgeText, { color: colors.accentForeground }]}>ADMIN</Text>
@@ -1057,13 +1028,15 @@ export function CircleDetailModal({
                       </View>
                       <Text style={[styles.memberMeta, { color: colors.mutedForeground }]}>
                         {m.phone ? `${m.phone} · ` : ''}
-                        {m.joinedDate ? `Joined ${m.joinedDate} · ` : ''}
+                        {isRemovedMember
+                          ? `Removed ${m.removedAt ? new Date(m.removedAt).toLocaleDateString() : 'from circle'} · `
+                          : m.joinedDate ? `Joined ${m.joinedDate} · ` : ''}
                         Contributed KES {m.totalContributed.toLocaleString()}
                       </Text>
                     </View>
 
                     {/* Admin Delegation Actions */}
-                    {isCircleAdmin && !isAdminMember && onAssignCoAdmin && onRemoveCoAdmin ? (
+                    {isCircleAdmin && m.status === 'active' && !isAdminMember && onAssignCoAdmin && onRemoveCoAdmin ? (
                       <View style={styles.adminActionWrap}>
                         {isCoAdminMember ? (
                           <Pressable
@@ -1088,6 +1061,19 @@ export function CircleDetailModal({
                         ) : (
                           <Text style={[styles.coAdminLimitNotice, { color: colors.mutedForeground }]}>Max 3 admins</Text>
                         )}
+                      </View>
+                    ) : null}
+                    {canRemoveMember && onRemoveCircleMember ? (
+                      <View style={styles.adminActionWrap}>
+                        <Pressable
+                          testID={`remove-member-${m.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Remove ${m.name} from circle`}
+                          onPress={() => { setRemoveMemberError(null); setMemberToRemove(m); }}
+                          style={({ pressed }) => [styles.coAdminToggleBtn, { borderColor: colors.destructive, opacity: pressed ? 0.7 : 1 }]}
+                        >
+                          <Text style={[styles.coAdminToggleText, { color: colors.destructive }]}>Remove</Text>
+                        </Pressable>
                       </View>
                     ) : null}
                   </View>
@@ -1363,7 +1349,7 @@ export function CircleDetailModal({
             <Text style={[styles.modalEyebrow, { color: colors.primary }]}>CIRCLE MEMBERSHIP</Text>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>Add Circle Member</Text>
             <Text style={[styles.modalHint, { color: colors.mutedForeground }]}>
-              Each circle can have a maximum of 100 members. Currently {membersList.length}/100.
+              Each circle can have a maximum of 100 active members. Currently {membersList.filter((member) => member.status === 'active').length}/100.
             </Text>
 
             <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Full Name</Text>
@@ -1395,6 +1381,47 @@ export function CircleDetailModal({
               <View style={{ flex: 1 }}>
                 <PrimaryButton label="Add to Circle" icon="check" onPress={handleAddMemberSubmit} />
               </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={memberToRemove !== null}
+        transparent
+        animationType={sheet.animationType}
+        onRequestClose={() => { if (!removingMember) setMemberToRemove(null); }}
+      >
+        <View style={[sheet.shade, { backgroundColor: 'rgba(5, 8, 17, 0.70)' }]}>
+          <View style={[sheet.card, { backgroundColor: colors.card }]}>
+            <View style={[sheet.handle, { marginBottom: 18 }]} />
+            <Text style={[styles.modalEyebrow, { color: colors.destructive }]}>CIRCLE ACCESS</Text>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Remove {memberToRemove?.name}?</Text>
+            <Text style={[styles.modalHint, { color: colors.mutedForeground }]}>
+              This revokes their access to this circle and its shared data. Their contributions, loan applications, repayments, and transactions stay in the circle history. Their Turiwa account and any loan debt are not deleted.
+              {memberToRemove?.id === circle.createdBy ? ' Another active co-admin will become the primary admin.' : ''}
+            </Text>
+            {removeMemberError ? (
+              <Text testID="remove-member-error" style={[styles.saveError, { color: colors.destructive }]}>{removeMemberError}</Text>
+            ) : null}
+            <View style={styles.modalActions}>
+              <Pressable
+                disabled={removingMember}
+                onPress={() => setMemberToRemove(null)}
+                style={({ pressed }) => [styles.cancelButton, { borderColor: colors.border, opacity: pressed || removingMember ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.cancelText, { color: colors.inkSoft }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                testID="remove-member-confirm"
+                accessibilityRole="button"
+                disabled={removingMember}
+                onPress={handleRemoveCircleMember}
+                style={({ pressed }) => [styles.deleteConfirmButton, { backgroundColor: colors.destructive, opacity: pressed || removingMember ? 0.7 : 1 }]}
+              >
+                <Feather name="user-x" size={15} color={colors.destructiveForeground} />
+                <Text style={[styles.deleteConfirmText, { color: colors.destructiveForeground }]}>{removingMember ? 'Removing…' : 'Remove member'}</Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1675,6 +1702,7 @@ export const styles = StyleSheet.create({
   feedbackBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 14 },
   feedbackText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   approvalsSection: { marginTop: 22 },
+  circleLoanSection: { marginTop: 18, gap: 8 },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   subBadgeText: { fontFamily: 'Inter_500Medium', fontSize: 11 },
   approvalCard: { borderWidth: 1, borderRadius: 16, padding: 14, marginBottom: 10 },

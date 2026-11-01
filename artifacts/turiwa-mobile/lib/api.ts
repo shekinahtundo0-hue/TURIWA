@@ -125,8 +125,10 @@ export type CircleMember = {
   role: CircleRole;
   // An invite the person has not accepted is on the group's list but is not one of
   // its members, so the headcount and the list say different things on purpose.
-  status: 'pending' | 'active';
+  status: 'pending' | 'active' | 'removed';
   joinedDate: string;
+  removedAt?: string;
+  removedBy?: string;
   totalContributed: number;
   /** What this member has paid towards the contribution cycle running now. */
   paidThisPeriod?: number;
@@ -225,15 +227,19 @@ export const recentMonthKeys = (count = 12, at: Date = new Date()): string[] =>
 
 export type Loan = {
   id: string;
+  applicantId: string | null;
+  applicantName: string;
   // The group a loan was taken through. Loans saved before the group was recorded
   // have none, and the screens then quote the rate without naming a group.
   circleId: string | null;
   principal: number;  balance: number;
+  requestedPrincipal: number;
   monthlyRepayment: number;
   // Principal plus the interest it compounds to over the term. `balance` counts
   // down from this, so repaying it in full clears the loan.
   totalPayable: number;
   months: number;
+  requestedMonths: number;
   interestRate: number;
   interestPeriod: InterestPeriod;
   dueDate: string;
@@ -242,6 +248,11 @@ export type Loan = {
   dueOn: string | null;
   purpose: string;
   status: 'Active' | 'Pending' | 'Paid off' | 'Rejected';
+  submittedAt: string;
+  reviewedBy: string | null;
+  reviewerName: string | null;
+  reviewedAt: string | null;
+  rejectionReason: string | null;
 };
 
 export type AppState = {
@@ -419,10 +430,10 @@ export function applyFine(circleId: string, memberId: string) {
   });
 }
 
-export function applyForLoan(amount: number, purpose: string, circleId?: string) {
+export function applyForLoan(amount: number, purpose: string, circleId: string, preferredMonths: number) {
   return request<AppState>('/loans', {
     method: 'POST',
-    body: JSON.stringify({ amount, purpose, circleId }),
+    body: JSON.stringify({ amount, purpose, circleId, preferredMonths }),
   });
 }
 
@@ -433,15 +444,23 @@ export function repayLoan(loanId: string, amount: number) {
   });
 }
 
-export function approveLoan(loanId: string) {
+export function approveLoan(loanId: string, terms: { amount: number; months: number; interestRate: number }) {
   return request<AppState>(`/loans/${loanId}/approve`, {
     method: 'POST',
+    body: JSON.stringify(terms),
   });
 }
 
-export function rejectLoan(loanId: string) {
+export function rejectLoan(loanId: string, reason: string) {
   return request<AppState>(`/loans/${loanId}/reject`, {
     method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function removeCircleMember(circleId: string, memberId: string) {
+  return request<AppState>(`/circles/${encodeURIComponent(circleId)}/members/${encodeURIComponent(memberId)}`, {
+    method: 'DELETE',
   });
 }
 
