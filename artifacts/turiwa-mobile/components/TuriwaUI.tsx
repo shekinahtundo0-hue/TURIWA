@@ -571,6 +571,7 @@ export function CircleDetailModal({
   isCoAdmin = false,
   onContribute,
   onApproveLoan,
+  onRejectLoan,
   onAssignCoAdmin,
   onRemoveCoAdmin,
   onAddMember,
@@ -588,6 +589,7 @@ export function CircleDetailModal({
   isCoAdmin?: boolean;
   onContribute?: (circleId: string) => void;
   onApproveLoan?: (loanId: string) => Promise<void>;
+  onRejectLoan?: (loanId: string) => Promise<void>;
   onAssignCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onRemoveCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onAddMember?: (circleId: string, name: string, phone?: string) => Promise<{ success: boolean; message: string }>;
@@ -609,6 +611,7 @@ export function CircleDetailModal({
   const [memberActionFeedback, setMemberActionFeedback] = React.useState<string | null>(null);
   const [approvalFeedback, setApprovalFeedback] = React.useState<{ message: string; failed: boolean } | null>(null);
   const [approvingLoanId, setApprovingLoanId] = React.useState<string | null>(null);
+  const [rejectingLoanId, setRejectingLoanId] = React.useState<string | null>(null);
   const [deleteVisible, setDeleteVisible] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
@@ -661,6 +664,23 @@ export function CircleDetailModal({
       });
     } finally {
       setApprovingLoanId(null);
+      setTimeout(() => setApprovalFeedback(null), 4000);
+    }
+  };
+
+  const handleRejectLoan = async (loanId: string) => {
+    if (!onRejectLoan || approvingLoanId || rejectingLoanId) return;
+    setRejectingLoanId(loanId);
+    try {
+      await onRejectLoan(loanId);
+      setApprovalFeedback({ message: 'Loan request rejected. No money moved from the group.', failed: false });
+    } catch (error) {
+      setApprovalFeedback({
+        message: error instanceof Error ? error.message : 'Could not reject that loan request. Try again.',
+        failed: true,
+      });
+    } finally {
+      setRejectingLoanId(null);
       setTimeout(() => setApprovalFeedback(null), 4000);
     }
   };
@@ -919,21 +939,38 @@ export function CircleDetailModal({
                           Requested: KES {loan.principal.toLocaleString()} · {interestLabel(loan.interestRate, loan.interestPeriod)} · Repay: KES {loan.monthlyRepayment.toLocaleString()}/mo
                         </Text>
                       </View>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Approve ${loan.purpose}`}
-                        accessibilityState={{ disabled: approvingLoanId !== null }}
-                        onPress={() => handleApproveLoan(loan.id)}
-                        style={({ pressed }) => [
-                          styles.approveButton,
-                          { backgroundColor: colors.primary, opacity: approvingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
-                        ]}
-                      >
-                        <Feather name={approvingLoanId === loan.id ? 'clock' : 'check'} size={14} color={colors.primaryForeground} />
-                        <Text style={[styles.approveButtonText, { color: colors.primaryForeground }]}>
-                          {approvingLoanId === loan.id ? 'Approving' : 'Approve'}
-                        </Text>
-                      </Pressable>
+                      <View style={styles.loanDecisionActions}>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Reject ${loan.purpose}`}
+                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
+                          onPress={() => handleRejectLoan(loan.id)}
+                          style={({ pressed }) => [
+                            styles.approveButton,
+                            { backgroundColor: colors.destructiveSoft, opacity: rejectingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
+                          ]}
+                        >
+                          <Feather name={rejectingLoanId === loan.id ? 'clock' : 'x'} size={14} color={colors.destructive} />
+                          <Text style={[styles.approveButtonText, { color: colors.destructive }]}>
+                            {rejectingLoanId === loan.id ? 'Rejecting' : 'Reject'}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Approve ${loan.purpose}`}
+                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
+                          onPress={() => handleApproveLoan(loan.id)}
+                          style={({ pressed }) => [
+                            styles.approveButton,
+                            { backgroundColor: colors.primary, opacity: approvingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
+                          ]}
+                        >
+                          <Feather name={approvingLoanId === loan.id ? 'clock' : 'check'} size={14} color={colors.primaryForeground} />
+                          <Text style={[styles.approveButtonText, { color: colors.primaryForeground }]}>
+                            {approvingLoanId === loan.id ? 'Approving' : 'Approve'}
+                          </Text>
+                        </Pressable>
+                      </View>
                     </View>
                   </View>
                 ))}
@@ -1421,6 +1458,8 @@ export function notificationItems(contributions: Contribution[], loans: Loan[], 
       list.push({ id: `loan-${loan.id}`, icon: 'credit-card', title: 'Loan update', copy: `KES ${loan.balance.toLocaleString()} remaining on your "${loan.purpose}" loan.`, date: `Due ${loan.dueDate}` });
     } else if (loan.status === 'Pending') {
       list.push({ id: `loan-${loan.id}`, icon: 'clock', title: 'Loan application', copy: `Your "${loan.purpose}" loan request is under review.`, date: `Due ${loan.dueDate}` });
+    } else if (loan.status === 'Rejected') {
+      list.push({ id: `loan-${loan.id}`, icon: 'x-circle', title: 'Loan request declined', copy: `Your "${loan.purpose}" loan request was declined by the group admin.`, date: 'No money was paid out' });
     } else {
       list.push({ id: `loan-${loan.id}`, icon: 'check-circle', title: 'Loan paid off', copy: `Your "${loan.purpose}" loan is fully repaid. Well done!`, date: `Due ${loan.dueDate}` });
     }
@@ -1643,6 +1682,7 @@ export const styles = StyleSheet.create({
   approvalBorrower: { fontFamily: 'Inter_700Bold', fontSize: 14 },
   approvalMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4, lineHeight: 16 },
   approveButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 10 },
+  loanDecisionActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   approveButtonText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   membersSection: { marginTop: 22 },
   addMemberBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },

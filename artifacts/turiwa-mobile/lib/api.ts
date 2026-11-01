@@ -241,7 +241,7 @@ export type Loan = {
   // the app stored one. "Overdue" is a comparison, and a comparison needs a date.
   dueOn: string | null;
   purpose: string;
-  status: 'Active' | 'Pending' | 'Paid off';
+  status: 'Active' | 'Pending' | 'Paid off' | 'Rejected';
 };
 
 export type AppState = {
@@ -435,6 +435,12 @@ export function repayLoan(loanId: string, amount: number) {
 
 export function approveLoan(loanId: string) {
   return request<AppState>(`/loans/${loanId}/approve`, {
+    method: 'POST',
+  });
+}
+
+export function rejectLoan(loanId: string) {
+  return request<AppState>(`/loans/${loanId}/reject`, {
     method: 'POST',
   });
 }

@@ -15,12 +15,13 @@ import { BrandHeader, PrimaryButton, Screen, SectionHeading, useSheet, styles as
 export default function LoansScreen() {
   const colors = useColors();
   const { isDark } = useTheme();
-  const { loans, circles, finance, applyForLoan, repayLoan, approveLoan, user } = useTuriwa();
+  const { loans, circles, finance, applyForLoan, repayLoan, approveLoan, rejectLoan, user } = useTuriwa();
   const [applicationVisible, setApplicationVisible] = useState(false);
   const [repaymentFor, setRepaymentFor] = useState<Loan | null>(null);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [approvalFeedback, setApprovalFeedback] = useState<{ message: string; failed: boolean } | null>(null);
   const [approvingLoanId, setApprovingLoanId] = useState<string | null>(null);
+  const [rejectingLoanId, setRejectingLoanId] = useState<string | null>(null);
 
   const administeredCircles = circles.filter((c) => {
     const id = user?.id;
@@ -47,7 +48,7 @@ export default function LoansScreen() {
   const lendable = finance.lendable;
 
   const handleApprove = async (loanId: string) => {
-    if (approvingLoanId) return;
+    if (approvingLoanId || rejectingLoanId) return;
     setApprovingLoanId(loanId);
     try {
       await approveLoan(loanId);
@@ -63,6 +64,25 @@ export default function LoansScreen() {
       });
     } finally {
       setApprovingLoanId(null);
+      setTimeout(() => setApprovalFeedback(null), 4000);
+    }
+  };
+
+  const handleReject = async (loanId: string) => {
+    if (approvingLoanId || rejectingLoanId) return;
+    setRejectingLoanId(loanId);
+    try {
+      await rejectLoan(loanId);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setApprovalFeedback({ message: 'Loan request rejected. No money moved from the group.', failed: false });
+    } catch (error) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setApprovalFeedback({
+        message: error instanceof Error ? error.message : 'Could not reject that loan request. Try again.',
+        failed: true,
+      });
+    } finally {
+      setRejectingLoanId(null);
       setTimeout(() => setApprovalFeedback(null), 4000);
     }
   };
@@ -153,22 +173,40 @@ export default function LoansScreen() {
                           {circle?.name ? `${circle.name} · ` : ''}KES {loan.principal.toLocaleString()} · KES {loan.totalPayable.toLocaleString()} back · {interestLabel(loan.interestRate, loan.interestPeriod)} · KES {loan.monthlyRepayment.toLocaleString()}/mo
                         </Text>
                       </View>
-                      <Pressable
-                        testID={`loan-approve-${loan.id}`}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Approve ${loan.purpose}`}
-                        accessibilityState={{ disabled: approvingLoanId !== null }}
-                        onPress={() => handleApprove(loan.id)}
-                        style={({ pressed }) => [
-                          styles.approveActionBtn,
-                          { backgroundColor: colors.primary, opacity: approvingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
-                        ]}
-                      >
-                        <Feather name={approvingLoanId === loan.id ? 'clock' : 'check'} size={13} color={colors.primaryForeground} />
-                        <Text style={[styles.approveActionText, { color: colors.primaryForeground }]}>
-                          {approvingLoanId === loan.id ? 'Approving' : 'Approve'}
-                        </Text>
-                      </Pressable>
+                      <View style={styles.loanDecisionActions}>
+                        <Pressable
+                          testID={`loan-reject-${loan.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Reject ${loan.purpose}`}
+                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
+                          onPress={() => handleReject(loan.id)}
+                          style={({ pressed }) => [
+                            styles.approveActionBtn,
+                            { backgroundColor: colors.destructiveSoft, opacity: rejectingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
+                          ]}
+                        >
+                          <Feather name={rejectingLoanId === loan.id ? 'clock' : 'x'} size={13} color={colors.destructive} />
+                          <Text style={[styles.approveActionText, { color: colors.destructive }]}>
+                            {rejectingLoanId === loan.id ? 'Rejecting' : 'Reject'}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          testID={`loan-approve-${loan.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Approve ${loan.purpose}`}
+                          accessibilityState={{ disabled: approvingLoanId !== null || rejectingLoanId !== null }}
+                          onPress={() => handleApprove(loan.id)}
+                          style={({ pressed }) => [
+                            styles.approveActionBtn,
+                            { backgroundColor: colors.primary, opacity: approvingLoanId === loan.id ? 0.6 : pressed ? 0.8 : 1 },
+                          ]}
+                        >
+                          <Feather name={approvingLoanId === loan.id ? 'clock' : 'check'} size={13} color={colors.primaryForeground} />
+                          <Text style={[styles.approveActionText, { color: colors.primaryForeground }]}>
+                            {approvingLoanId === loan.id ? 'Approving' : 'Approve'}
+                          </Text>
+                        </Pressable>
+                      </View>
                     </View>
                   </View>
                 );
@@ -273,9 +311,9 @@ function LoanHistoryModal({ visible, loans, finance, onClose }: { visible: boole
                   <View style={styles.historyRowTop}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.historyPurpose, { color: colors.foreground }]}>{loan.purpose}</Text>
-                      <Text style={[styles.historyMeta, { color: colors.mutedForeground }]}>{loan.status === 'Paid off' ? 'Fully repaid' : loan.status === 'Pending' ? 'Waiting for the group to decide' : `Due ${loan.dueDate}`} · {interestLabel(loan.interestRate, loan.interestPeriod)}</Text>
+                      <Text style={[styles.historyMeta, { color: colors.mutedForeground }]}>{loan.status === 'Paid off' ? 'Fully repaid' : loan.status === 'Rejected' ? 'Request declined by the group' : loan.status === 'Pending' ? 'Waiting for the group to decide' : `Due ${loan.dueDate}`} · {interestLabel(loan.interestRate, loan.interestPeriod)}</Text>
                     </View>
-                    <View style={[styles.statusBadge, { backgroundColor: loan.status === 'Active' ? colors.successSoft : loan.status === 'Pending' ? colors.warmSurface : colors.muted }]}><Text style={[styles.statusBadgeText, { color: loan.status === 'Active' ? colors.primary : loan.status === 'Pending' ? colors.accentForeground : colors.mutedForeground }]}>{loan.status}</Text></View>
+                    <View style={[styles.statusBadge, { backgroundColor: loan.status === 'Active' ? colors.successSoft : loan.status === 'Pending' ? colors.warmSurface : loan.status === 'Rejected' ? colors.destructiveSoft : colors.muted }]}><Text style={[styles.statusBadgeText, { color: loan.status === 'Active' ? colors.primary : loan.status === 'Pending' ? colors.accentForeground : loan.status === 'Rejected' ? colors.destructive : colors.mutedForeground }]}>{loan.status}</Text></View>
                   </View>
                   <View style={styles.historyAmounts}>
                     <View><Text style={[styles.historyAmountLabel, { color: colors.mutedForeground }]}>{loan.status === 'Pending' ? 'REQUESTED' : 'BORROWED'}</Text><Text style={[styles.historyAmountValue, { color: colors.foreground }]}>KES {loan.principal.toLocaleString()}</Text></View>
@@ -634,6 +672,7 @@ const styles = StyleSheet.create({
   adminReviewBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
   adminReviewBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 8.5, letterSpacing: 0.8 },
   approveActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 10 },
+  loanDecisionActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   approveActionText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   adminQueueClear: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 14, padding: 13, marginBottom: 10 },
   adminQueueText: { fontFamily: 'Inter_500Medium', fontSize: 12, flex: 1, lineHeight: 17 },

@@ -130,7 +130,7 @@ export type AppState = {
     // stored one. An overdue figure needs a date it can compare, not a label.
     dueOn: string | null;
     purpose: string;
-    status: "Active" | "Pending" | "Paid off";
+    status: "Active" | "Pending" | "Paid off" | "Rejected";
   }>;
 };
 
@@ -167,8 +167,8 @@ function asLedgerType(value: string): LedgerType {
   return LEDGER_TYPES.includes(value as LedgerType) ? (value as LedgerType) : "Contribution";
 }
 
-function asLoanStatus(value: string): "Active" | "Pending" | "Paid off" {
-  if (value === "Pending" || value === "Paid off") return value;
+function asLoanStatus(value: string): "Active" | "Pending" | "Paid off" | "Rejected" {
+  if (value === "Pending" || value === "Paid off" || value === "Rejected") return value;
   return "Active";
 }
 

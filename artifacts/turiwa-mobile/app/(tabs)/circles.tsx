@@ -25,6 +25,7 @@ export default function CirclesScreen() {
     applyFine,
     addContribution,
     approveLoan,
+    rejectLoan,
     refresh,
     refreshing,
   } = useTuriwa();
@@ -123,6 +124,10 @@ export default function CirclesScreen() {
         onContribute={openContribute}
         onApproveLoan={async (loanId) => {
           await approveLoan(loanId);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
+        onRejectLoan={async (loanId) => {
+          await rejectLoan(loanId);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }}
         canDeleteCircle={circles.length > 1}

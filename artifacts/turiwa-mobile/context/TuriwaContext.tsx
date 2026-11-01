@@ -103,6 +103,7 @@ type TuriwaContextValue = {
   applyForLoan: (amount: number, purpose: string, circleId?: string) => Promise<void>;
   repayLoan: (amount: number, loanId?: string) => Promise<void>;
   approveLoan: (loanId: string) => Promise<void>;
+  rejectLoan: (loanId: string) => Promise<void>;
   signIn: (phone: string, password: string) => Promise<void>;
   signInWithGoogle: (idToken: string) => Promise<void>;
   createAccount: (name: string, phone: string, password: string) => Promise<void>;
@@ -391,6 +392,10 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await applyState(await api.approveLoan(loanId));
   };
 
+  const rejectLoan = async (loanId: string) => {
+    await applyState(await api.rejectLoan(loanId));
+  };
+
   const openSession = async (session: api.AuthSession) => {
     api.setAuthToken(session.token);
     clearData();
@@ -585,12 +590,12 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       // Only loans that actually took cash earn anything: a request the group has
       // not decided on is a quote, not money the fund moved.
       interestEarned: loans
-        .filter((loan) => loan.status !== 'Pending')
+        .filter((loan) => loan.status === 'Active' || loan.status === 'Paid off')
         .reduce((sum, loan) => sum + (loan.totalPayable - loan.principal), 0),
       // Money actually borrowed, so a request nobody has approved is not counted as
       // cash the member has taken.
       totalBorrowed: loans
-        .filter((loan) => loan.status !== 'Pending')
+        .filter((loan) => loan.status === 'Active' || loan.status === 'Paid off')
         .reduce((sum, loan) => sum + loan.principal, 0),
       savedFor: (circleId: string) => byCircle.get(circleId) ?? 0,
       contributedForThisMonth: (circleId: string) => inMonth.get(circleId) ?? 0,
@@ -621,6 +626,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       applyForLoan,
       repayLoan,
       approveLoan,
+      rejectLoan,
       signIn,
       signInWithGoogle,
       createAccount,

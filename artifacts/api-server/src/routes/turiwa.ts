@@ -560,13 +560,52 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
       return;
     }
   }
-  await db
+  const changed = await db
     .update(loansTable)
     .set({ status: "Active", dueDate: formatDay(due), dueOn: isoDay(due) })
-    .where(eq(loansTable.id, loanId));
+    .where(and(eq(loansTable.id, loanId), eq(loansTable.status, "Pending")))
+    .returning({ id: loansTable.id });
+  if (changed.length === 0) {
+    res.status(409).json({ message: "This loan request has already been decided." });
+    return;
+  }
   // Approval is the moment the fund hands the money over, so it is the moment the
   // ledger records it.
   await recordLoanDisbursement({ ...loan, status: "Active" }, "Just now");
+  res.json(await publishState(userId));
+});
+
+router.post("/loans/:id/reject", requireAuth, async (req, res) => {
+  const userId = userIdOf(req);
+  const db = getDb();
+  const loanId = String(req.params.id);
+  const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId)).limit(1);
+  if (!loan) {
+    res.status(404).json({ message: "That loan request could not be found." });
+    return;
+  }
+  if (!loan.circleId) {
+    res.status(403).json({ message: "Only a circle admin can reject a group loan request." });
+    return;
+  }
+  const circle = await circleForMember(userId, loan.circleId);
+  if (!circle || !canManageCircle(circle, userId)) {
+    res.status(403).json({ message: "Only this circle's admin can reject its loan requests." });
+    return;
+  }
+  if (loan.status !== "Pending") {
+    res.status(409).json({ message: "Only a pending loan request can be rejected." });
+    return;
+  }
+  const changed = await db
+    .update(loansTable)
+    .set({ status: "Rejected" })
+    .where(and(eq(loansTable.id, loanId), eq(loansTable.status, "Pending")))
+    .returning({ id: loansTable.id });
+  if (changed.length === 0) {
+    res.status(409).json({ message: "This loan request has already been decided." });
+    return;
+  }
   res.json(await publishState(userId));
 });
 
