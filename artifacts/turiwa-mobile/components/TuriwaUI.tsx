@@ -1,11 +1,12 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Platform, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useResponsive } from '@/hooks/useResponsive';
-import { cycleNoun, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, RECORDABLE_LEDGER_TYPES, memberLabel, type AppNotification, type Circle, type CircleMember, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
+import { cycleNoun, entryDate, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, MAX_KES, RECORDABLE_LEDGER_TYPES, memberLabel, type AppNotification, type Circle, type CircleMember, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
 import { circleInviteUrl } from '@/lib/circleInvite';
 
 function confirmCircleAction(title: string, message: string, action: string, onConfirm: () => void, destructive = false) {
@@ -63,11 +64,21 @@ export function Screen({ children, scroll = true, refreshing = false, onRefresh 
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const layout = useResponsive();
-  const padding = { paddingHorizontal: layout.gutter };
-  const column: ViewStyle = { width: '100%', maxWidth: layout.contentMaxWidth, alignSelf: 'center' };
+  // react-native-web writes the ScrollView's own style onto both its wrapper and the scrollable
+  // element inside it, so a horizontal gutter set on the scroller was paid twice and left two
+  // strips at the window edge whose hit target could not scroll. The inset belongs on the content
+  // column instead: the scrollable element then spans the full width, and the column subtracts
+  // the same total it used to, so no screen changes width.
+  const inset = scroll ? layout.gutter * 2 : layout.gutter;
+  const column: ViewStyle = {
+    width: '100%',
+    maxWidth: layout.contentMaxWidth + inset * 2,
+    paddingHorizontal: inset,
+    alignSelf: 'center',
+  };
   if (!scroll) {
     return (
-      <View style={[styles.screen, { backgroundColor: colors.background }, padding]}>
+      <View style={[styles.screen, { backgroundColor: colors.background }]}>
         <View style={column}>
           <OfflineBanner />
           {children}
@@ -77,7 +88,7 @@ export function Screen({ children, scroll = true, refreshing = false, onRefresh 
   }
   return (
     <ScrollView
-      style={[styles.screen, { backgroundColor: colors.background }, padding]}
+      style={[styles.screen, { backgroundColor: colors.background }]}
       contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: layout.useSidebar ? insets.bottom + 28 : 116 }}
       showsVerticalScrollIndicator={false}
       refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} /> : undefined}
@@ -450,20 +461,54 @@ export function CircleCard({
   );
 }
 
-export function ActivityRow({ note, date, amount, status, circleName, type = 'Contribution', member }: { note: string; date: string; amount: number; status: 'Complete' | 'Pending'; circleName?: string; type?: LedgerType; member?: string | null }) {
+export function ActivityRow({
+  id,
+  note,
+  date,
+  createdAt,
+  amount,
+  status,
+  circleName,
+  type = 'Contribution',
+  member,
+  loanId,
+  onPress,
+}: {
+  id?: string;
+  note: string;
+  date: string;
+  createdAt?: string;
+  amount: number;
+  status: 'Complete' | 'Pending';
+  circleName?: string;
+  type?: LedgerType;
+  member?: string | null;
+  loanId?: string | null;
+  onPress?: () => void;
+}) {
   const colors = useColors();
   const { tint: kindTint, surface: kindSurface, icon, sign } = ledgerTone(colors, type);
   const pending = status === 'Pending';
   const tint = pending ? colors.accentForeground : kindTint;
   const surface = pending ? colors.warmSurface : kindSurface;
-  const meta = [date, circleName, member].filter(Boolean).join(' · ');
-  return (
+  const displayDate = createdAt ? entryDate({ date, createdAt }) : date;
+  const meta = [displayDate, circleName, member].filter(Boolean).join(' · ');
+  const isInteractive = typeof onPress === 'function';
+
+  const rowContent = (
     <View style={[styles.activityRow, { borderBottomColor: colors.border }]}>
       <View style={[styles.activityIcon, { backgroundColor: surface, borderColor: colors.border }]}>
         <MaterialCommunityIcons name={pending ? 'clock-outline' : icon} size={18} color={tint} />
       </View>
       <View style={styles.activityCopy}>
-        <Text style={[styles.activityNote, { color: colors.foreground }]} numberOfLines={1}>{note}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <Text style={[styles.activityNote, { color: colors.foreground }]} numberOfLines={1}>{note}</Text>
+          {loanId ? (
+            <View style={[styles.loanTag, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+              <Text style={[styles.loanTagText, { color: colors.mutedForeground }]}>Loan</Text>
+            </View>
+          ) : null}
+        </View>
         <Text style={[styles.activityDate, { color: colors.mutedForeground }]} numberOfLines={1}>{meta}</Text>
       </View>
       <View style={styles.activityAmount}>
@@ -472,7 +517,27 @@ export function ActivityRow({ note, date, amount, status, circleName, type = 'Co
           <Text style={[styles.statusText, { color: tint }]}>{pending ? 'Pending' : ledgerLabel(type)}</Text>
         </View>
       </View>
+      {isInteractive ? (
+        <Feather name="chevron-right" size={15} color={colors.mutedForeground} style={{ opacity: 0.45, marginLeft: 2 }} />
+      ) : null}
     </View>
+  );
+
+  if (!isInteractive) return rowContent;
+
+  return (
+    <Pressable
+      testID={id ? `activity-row-${id}` : undefined}
+      onPress={() => {
+        Haptics.selectionAsync().catch(() => {});
+        onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={`${note}, ${amount.toLocaleString()} shillings, ${status}`}
+      style={({ pressed }) => [{ opacity: pressed ? 0.72 : 1 }]}
+    >
+      {rowContent}
+    </Pressable>
   );
 }
 
@@ -481,16 +546,10 @@ const LEDGER_HINT: Record<LedgerType, string> = {
   Expense: 'Money the group spent.',
   Repayment: 'Money coming back from a loan.',
   Welfare: 'Money the group sets aside and still holds.',
-  // Not in the form: the fine section on a circle writes this row, naming the member
-  // and the cycle, so a hand-typed one could charge somebody the admin never chose.
   Fine: 'A late contribution fine the admin recorded for a member.',
-  // Not in the form: the API writes this row itself when a loan's money moves, so a
-  // hand-typed one could report a payout no loan owes the fund for.
   LoanDisbursement: 'Cash the group handed over as a loan. The loan writes this row itself.',
 };
 
-// The kind as a person would say it. "LoanDisbursement" is the stored value, not a
-// label that fits a row on a phone.
 const LEDGER_LABEL: Record<LedgerType, string> = {
   Contribution: 'Contribution',
   Expense: 'Expense',
@@ -502,18 +561,190 @@ const LEDGER_LABEL: Record<LedgerType, string> = {
 
 export const ledgerLabel = (type: LedgerType) => LEDGER_LABEL[type];
 
-// An expense leaves the fund, welfare only leaves the spendable net, and the
-// rest are money in - so the sign, ink and icon change with the kind.
 function ledgerTone(colors: ReturnType<typeof useColors>, type: LedgerType) {
-  // A loan's cash is going out, but it is not spending: it comes back as repayments,
-  // so it gets its own ink rather than the expense red.
   if (isLentOut(type)) return { tint: colors.balance, surface: colors.balanceSoft, icon: 'bank-transfer-out' as const, sign: '−' };
   if (isOutflow(type)) return { tint: colors.expense, surface: colors.expenseSoft, icon: 'arrow-top-right' as const, sign: '−' };
   if (isSetAside(type)) return { tint: colors.balance, surface: colors.balanceSoft, icon: 'bookmark-outline' as const, sign: '' };
-  // A fine is money in like a contribution, but the gavel tells the row apart at a
-  // glance from the payments a member chose to make.
   if (type === 'Fine') return { tint: colors.income, surface: colors.incomeSoft, icon: 'gavel' as const, sign: '+' };
   return { tint: colors.income, surface: colors.incomeSoft, icon: 'arrow-bottom-left' as const, sign: '+' };
+}
+
+export function TransactionDetailModal({
+  visible,
+  onClose,
+  transaction,
+  circleName,
+  onViewLoan,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  transaction: Contribution | null;
+  circleName?: string;
+  onViewLoan?: (loanId: string) => void;
+}) {
+  const colors = useColors();
+  const sheet = useSheet();
+
+  if (!transaction) return null;
+
+  const type = transaction.type ?? 'Contribution';
+  const { tint, surface, icon, sign } = ledgerTone(colors, type);
+  const isLoan = Boolean(transaction.loanId);
+  const isPending = transaction.status === 'Pending';
+  const formattedDate = entryDate(transaction);
+  const exactTime = transaction.createdAt
+    ? new Date(transaction.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
+
+  const handleShare = async () => {
+    try {
+      await Share.share({
+        message: `Turiwa Transaction: ${transaction.note}\nAmount: KES ${transaction.amount.toLocaleString()}\nType: ${ledgerLabel(type)}\nCircle: ${circleName ?? 'N/A'}\nStatus: ${transaction.status}\nRef: ${transaction.id}`,
+      });
+    } catch {}
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
+      <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
+        <View style={[sheet.card, { backgroundColor: colors.card }]}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
+            <View style={sheet.handle} />
+            <View style={styles.ledgerHead}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.modalEyebrow, { color: colors.primary, marginBottom: 4 }]}>TRANSACTION RECORD</Text>
+                <Text style={[styles.modalTitle, { color: colors.foreground, fontSize: 20 }]}>{ledgerLabel(type)}</Text>
+              </View>
+              <Pressable
+                testID="transaction-detail-close"
+                onPress={onClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close transaction details"
+                hitSlop={12}
+                style={({ pressed }) => [styles.ledgerClose, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}
+              >
+                <Feather name="x" size={16} color={colors.mutedForeground} />
+              </Pressable>
+            </View>
+
+            {/* Hero Amount & Status */}
+            <View style={[styles.detailHeroCard, { backgroundColor: surface, borderColor: colors.border }]}>
+              <View style={[styles.summaryIconBox, { backgroundColor: 'rgba(255, 255, 255, 0.45)', width: 30, height: 30, borderRadius: 9 }]}>
+                <MaterialCommunityIcons name={icon} size={18} color={tint} />
+              </View>
+              <Text style={[styles.detailHeroAmount, { color: tint }]}>
+                {sign} KES {transaction.amount.toLocaleString()}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <View style={[styles.detailDirectionPill, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}>
+                  <Text style={[styles.detailDirectionText, { color: tint }]}>
+                    {isLentOut(type) ? 'LOAN DISBURSED' : isOutflow(type) ? 'OUTFLOW' : isSetAside(type) ? 'WELFARE SET-ASIDE' : 'INFLOW'}
+                  </Text>
+                </View>
+                <View style={[styles.detailDirectionPill, { backgroundColor: isPending ? colors.warmSurface : colors.successSoft, borderColor: colors.border, borderWidth: 1 }]}>
+                  <Feather name={isPending ? 'clock' : 'check'} size={11} color={isPending ? colors.accentForeground : colors.primary} />
+                  <Text style={[styles.detailDirectionText, { color: isPending ? colors.accentForeground : colors.primary }]}>
+                    {isPending ? 'PENDING' : 'COMPLETE'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Full Record Metadata */}
+            <View style={[styles.detailGrid, { backgroundColor: colors.input, borderColor: colors.border }]}>
+              <View style={styles.txDetailRow}>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Reference</Text>
+                <Text style={[styles.detailValue, styles.detailMono, { color: colors.foreground }]} numberOfLines={1} selectable>
+                  {transaction.id}
+                </Text>
+              </View>
+              <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Circle</Text>
+                <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={1}>
+                  {circleName ?? 'Unassigned'}
+                </Text>
+              </View>
+              {transaction.member ? (
+                <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Member</Text>
+                  <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={1}>
+                    {transaction.member}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Date & Time</Text>
+                <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={1}>
+                  {formattedDate}{exactTime ? ` · ${exactTime}` : ''}
+                </Text>
+              </View>
+              <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Description</Text>
+                <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={3}>
+                  {transaction.note}
+                </Text>
+              </View>
+              {isLoan && transaction.loanId ? (
+                <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Linked Loan</Text>
+                  <Text style={[styles.detailValue, styles.detailMono, { color: colors.primary }]} numberOfLines={1}>
+                    {transaction.loanId}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Accounting Definition Box */}
+            <View style={[styles.feedbackBanner, { backgroundColor: colors.muted, borderColor: colors.border, marginTop: 12 }]}>
+              <Feather name="info" size={14} color={colors.mutedForeground} />
+              <Text style={[styles.fineRule, { color: colors.mutedForeground, flex: 1 }]}>
+                {LEDGER_HINT[type]}
+              </Text>
+            </View>
+
+            {/* Actions */}
+            <View style={styles.detailActions}>
+              <Pressable
+                testID="transaction-detail-share"
+                onPress={handleShare}
+                accessibilityRole="button"
+                accessibilityLabel="Share this transaction record"
+                style={({ pressed }) => [styles.detailActionButton, { borderColor: colors.border, backgroundColor: colors.background, opacity: pressed ? 0.75 : 1 }]}
+              >
+                <Feather name="share-2" size={15} color={colors.foreground} />
+                <Text style={[styles.detailActionText, { color: colors.foreground }]}>Share</Text>
+              </Pressable>
+              {isLoan && transaction.loanId && onViewLoan ? (
+                <Pressable
+                  testID="transaction-detail-view-loan"
+                  onPress={() => {
+                    onClose();
+                    onViewLoan(transaction.loanId!);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="View linked loan"
+                  style={({ pressed }) => [styles.detailActionButton, { borderColor: colors.primary, backgroundColor: colors.successSoft, opacity: pressed ? 0.75 : 1 }]}
+                >
+                  <Feather name="arrow-up-right" size={15} color={colors.primary} />
+                  <Text style={[styles.detailActionText, { color: colors.primary }]}>View Loan</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  testID="transaction-detail-done"
+                  onPress={onClose}
+                  accessibilityRole="button"
+                  accessibilityLabel="Done"
+                  style={({ pressed }) => [styles.detailActionButton, { borderColor: colors.primary, backgroundColor: colors.primary, opacity: pressed ? 0.85 : 1 }]}
+                >
+                  <Text style={[styles.detailActionText, { color: colors.primaryForeground }]}>Done</Text>
+                </Pressable>
+              )}
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 export function RecordTransactionModal({ visible, onClose, onSave, circles, initialCircleId, initialType = 'Contribution' }: { visible: boolean; onClose: () => void; onSave: (amount: number, note: string, circleId?: string, entry?: LedgerEntry) => Promise<void>; circles: Circle[]; initialCircleId?: string; initialType?: LedgerType }) {
@@ -527,9 +758,9 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
   const [memberOpen, setMemberOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
+  const inFlightRef = React.useRef(false);
+
   React.useEffect(() => {
-    // Reset only when the sheet opens or the target circle changes; a background
-    // state poll swaps the circles array identity and must not revert the picker.
     if (visible) {
       setCircleId(initialCircleId && circles.some((item) => item.id === initialCircleId) ? initialCircleId : circles[0]?.id);
       setType(initialType);
@@ -539,166 +770,224 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, initialCircleId, initialType]);
+
   const selected = circles.find((item) => item.id === circleId) ?? circles[0];
   const roster = selected?.membersList ?? [];
   const chosen = roster.find((item) => item.id === memberId) ?? null;
-  const validAmount = Number(amount) > 0;
+  const numAmount = Number(amount);
+  const validAmount = Number.isFinite(numAmount) && numAmount > 0 && numAmount <= MAX_KES;
+
   const quickAmounts = React.useMemo(() => {
-    const values = [selected?.contribution ?? 0, 500, 1000, 2000, 5000].filter((value) => value > 0);
+    const values = [selected?.contribution ?? 0, 500, 1000, 2000, 5000].filter((value) => value > 0 && value <= MAX_KES);
     return [...new Set(values)].sort((a, b) => a - b);
   }, [selected?.contribution]);
+
   const save = async () => {
-    if (!validAmount || !selected) return;
+    if (!validAmount || !selected || inFlightRef.current || saving) return;
+    inFlightRef.current = true;
     setSaving(true);
     setError('');
     try {
-      await onSave(Number(amount), note.trim() || type, selected.id, { type, member: chosen?.name ?? null });
+      await onSave(numAmount, note.trim() || type, selected.id, { type, member: chosen?.name ?? null });
       setAmount('');
       setNote('');
       setMemberId(null);
+      setError('');
       onClose();
     } catch (err) {
+      // Retain form inputs on recoverable error so the user does not lose their entries
       setError(err instanceof Error ? err.message : 'Could not save. Try again in a moment.');
     } finally {
       setSaving(false);
+      inFlightRef.current = false;
     }
   };
+
   return (
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
           <ScrollView keyboardShouldPersistTaps="handled" style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
-          <View style={sheet.handle} />
-          <View style={styles.ledgerHead}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.modalEyebrow, { color: colors.primary, marginBottom: 7 }]}>LEDGER</Text>
-              <Text style={[styles.modalTitle, { color: colors.foreground }]}>Record a transaction</Text>
+            <View style={sheet.handle} />
+            <View style={styles.ledgerHead}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.modalEyebrow, { color: colors.primary, marginBottom: 7 }]}>LEDGER</Text>
+                <Text style={[styles.modalTitle, { color: colors.foreground }]}>Record a transaction</Text>
+              </View>
+              <Pressable testID="record-close" onPress={onClose} accessibilityRole="button" accessibilityLabel="Close without saving" hitSlop={12} style={({ pressed }) => [styles.ledgerClose, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}>
+                <Feather name="x" size={16} color={colors.mutedForeground} />
+              </Pressable>
             </View>
-            <Pressable testID="record-close" onPress={onClose} accessibilityRole="button" accessibilityLabel="Close without saving" hitSlop={12} style={({ pressed }) => [styles.ledgerClose, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}>
-              <Feather name="x" size={16} color={colors.mutedForeground} />
-            </Pressable>
-          </View>
 
-          <View style={[styles.typeGrid, { backgroundColor: colors.input }]}>
-            {RECORDABLE_LEDGER_TYPES.map((item) => {
-              const active = item === type;
-              const tint = ledgerTone(colors, item).tint;
-              return (
-                <Pressable
-                  key={item}
-                  testID={`record-type-${item.toLowerCase()}`}
-                  onPress={() => setType(item)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  style={({ pressed }) => [
-                    styles.typeCell,
-                    {
-                      backgroundColor: active ? colors.card : 'transparent',
-                      borderColor: active ? tint : colors.border,
-                      opacity: pressed ? 0.78 : 1,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.typeLabel, { color: active ? tint : colors.mutedForeground }]}>{ledgerLabel(item).toUpperCase()}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <Text style={[styles.ledgerHint, { color: colors.mutedForeground }]}>{LEDGER_HINT[type]}</Text>
-
-          {circles.length > 1 ? (
-            <>
-              <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>SELECT CIRCLE</Text>
-              <View style={styles.circlePicker}>
-                {circles.map((item) => {
-                  const active = item.id === selected?.id;
-                  return (
-                    <Pressable
-                      key={item.id}
-                      onPress={() => setCircleId(item.id)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: active }}
-                      style={({ pressed }) => [styles.circleChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
-                    >
-                      <Text style={[styles.circleChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{item.name}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </>
-          ) : null}
-
-          <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>SELECT MEMBER</Text>
-          <Pressable
-            testID="record-member"
-            onPress={() => setMemberOpen((open) => !open)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: memberOpen }}
-            style={({ pressed }) => [styles.memberField, { backgroundColor: colors.input, borderColor: memberOpen ? colors.primary : colors.border, opacity: pressed ? 0.85 : 1 }]}
-          >
-            <Text style={[styles.memberValue, { color: chosen ? colors.foreground : colors.mutedForeground }]} numberOfLines={1}>
-              {chosen ? chosen.name : 'Choose a member…'}
-            </Text>
-            <Feather name={memberOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.mutedForeground} />
-          </Pressable>
-          {memberOpen ? (
-            roster.length > 0 ? (
-              <View style={[styles.memberList, { backgroundColor: colors.input, borderColor: colors.border }]}>
-                <ScrollView style={styles.memberScroll} showsVerticalScrollIndicator={false}>
-                  {roster.map((item) => {
-                    const active = item.id === memberId;
-                    return (
-                      <Pressable
-                        key={item.id}
-                        testID={`record-member-${item.id}`}
-                        onPress={() => {
-                          setMemberId(active ? null : item.id);
-                          setMemberOpen(false);
-                        }}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: active }}
-                        style={({ pressed }) => [styles.memberOption, { borderBottomColor: colors.border, backgroundColor: active ? colors.successSoft : 'transparent', opacity: pressed ? 0.8 : 1 }]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.memberOptionText, { color: active ? colors.primary : colors.foreground }]} numberOfLines={1}>{item.name}</Text>
-                          <Text style={[styles.memberOptionMeta, { color: colors.mutedForeground }]} numberOfLines={1}>{item.role === 'admin' ? 'Circle admin' : item.role === 'co-admin' ? 'Co-admin' : 'Member'}</Text>
-                        </View>
-                        {active ? <Feather name="check" size={16} color={colors.primary} /> : null}
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            ) : (
-              <Text style={[styles.ledgerHint, { color: colors.mutedForeground }]}>This circle has no members to choose yet.</Text>
-            )
-          ) : null}
-
-          <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>AMOUNT (KSH)</Text>
-          <View style={[styles.inputWrap, { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border }]}><Text style={[styles.currencyPrefix, { color: colors.mutedForeground }]}>KSh</Text><TextInput testID="contribution-amount" value={amount} onChangeText={(value) => { setAmount(value.replace(/[^\d]/g, '')); if (error) setError(''); }} keyboardType="number-pad" placeholder="0.00" placeholderTextColor={colors.mutedForeground} style={[styles.amountInput, { color: colors.foreground }]} /></View>
-          {quickAmounts.length > 0 ? (
-            <View style={styles.amountChips}>
-              {quickAmounts.map((value) => {
-                const active = amount === String(value);
+            <View style={[styles.typeGrid, { backgroundColor: colors.input }]}>
+              {RECORDABLE_LEDGER_TYPES.map((item) => {
+                const active = item === type;
+                const tint = ledgerTone(colors, item).tint;
                 return (
                   <Pressable
-                    key={value}
-                    testID={`quick-amount-${value}`}
-                    onPress={() => setAmount(String(value))}
+                    key={item}
+                    testID={`record-type-${item.toLowerCase()}`}
+                    onPress={() => setType(item)}
                     accessibilityRole="button"
-                    accessibilityLabel={`Set the amount to ${value.toLocaleString()} shillings`}
-                    style={({ pressed }) => [styles.amountChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
+                    accessibilityState={{ selected: active }}
+                    style={({ pressed }) => [
+                      styles.typeCell,
+                      {
+                        backgroundColor: active ? colors.card : 'transparent',
+                        borderColor: active ? tint : colors.border,
+                        opacity: pressed ? 0.78 : 1,
+                      },
+                    ]}
                   >
-                    <Text style={[styles.amountChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{value >= 1000 ? `${value / 1000}K` : value}</Text>
+                    <Text style={[styles.typeLabel, { color: active ? tint : colors.mutedForeground }]}>{ledgerLabel(item).toUpperCase()}</Text>
                   </Pressable>
                 );
               })}
             </View>
-          ) : null}
+            <Text style={[styles.ledgerHint, { color: colors.mutedForeground }]}>{LEDGER_HINT[type]}</Text>
 
-          <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>MEMO / NOTES</Text>
-          <TextInput testID="contribution-note" value={note} onChangeText={setNote} placeholder="e.g. April Contribution, Audit Fees…" placeholderTextColor={colors.mutedForeground} style={[styles.textInput, { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border, color: colors.foreground }]} />
-          {error ? <Text style={[styles.saveError, { color: colors.destructive }]}>{error}</Text> : null}
+            {circles.length > 1 ? (
+              <>
+                <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>SELECT CIRCLE</Text>
+                <View style={styles.circlePicker}>
+                  {circles.map((item) => {
+                    const active = item.id === selected?.id;
+                    return (
+                      <Pressable
+                        key={item.id}
+                        onPress={() => setCircleId(item.id)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                        style={({ pressed }) => [styles.circleChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
+                      >
+                        <Text style={[styles.circleChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{item.name}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
+
+            <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>
+              {type === 'Expense'
+                ? 'BENEFICIARY / VENDOR (OPTIONAL)'
+                : type === 'Welfare'
+                ? 'MEMBER BENEFICIARY (OPTIONAL)'
+                : type === 'Repayment'
+                ? 'BORROWER REPAYING'
+                : 'SELECT MEMBER'}
+            </Text>
+            <Pressable
+              testID="record-member"
+              onPress={() => setMemberOpen((open) => !open)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: memberOpen }}
+              style={({ pressed }) => [styles.memberField, { backgroundColor: colors.input, borderColor: memberOpen ? colors.primary : colors.border, opacity: pressed ? 0.85 : 1 }]}
+            >
+              <Text style={[styles.memberValue, { color: chosen ? colors.foreground : colors.mutedForeground }]} numberOfLines={1}>
+                {chosen ? chosen.name : type === 'Expense' || type === 'Welfare' ? 'Circle General / Entire Group' : 'Choose a member…'}
+              </Text>
+              <Feather name={memberOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.mutedForeground} />
+            </Pressable>
+            {memberOpen ? (
+              roster.length > 0 ? (
+                <View style={[styles.memberList, { backgroundColor: colors.input, borderColor: colors.border }]}>
+                  <ScrollView style={styles.memberScroll} showsVerticalScrollIndicator={false}>
+                    {(type === 'Expense' || type === 'Welfare') ? (
+                      <Pressable
+                        testID="record-member-general"
+                        onPress={() => {
+                          setMemberId(null);
+                          setMemberOpen(false);
+                        }}
+                        accessibilityRole="button"
+                        style={({ pressed }) => [styles.memberOption, { borderBottomColor: colors.border, backgroundColor: memberId === null ? colors.successSoft : 'transparent', opacity: pressed ? 0.8 : 1 }]}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.memberOptionText, { color: memberId === null ? colors.primary : colors.foreground }]} numberOfLines={1}>Circle General / Entire Group</Text>
+                          <Text style={[styles.memberOptionMeta, { color: colors.mutedForeground }]} numberOfLines={1}>Not attributed to a single member</Text>
+                        </View>
+                        {memberId === null ? <Feather name="check" size={16} color={colors.primary} /> : null}
+                      </Pressable>
+                    ) : null}
+                    {roster.map((item) => {
+                      const active = item.id === memberId;
+                      return (
+                        <Pressable
+                          key={item.id}
+                          testID={`record-member-${item.id}`}
+                          onPress={() => {
+                            setMemberId(active ? null : item.id);
+                            setMemberOpen(false);
+                          }}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          style={({ pressed }) => [styles.memberOption, { borderBottomColor: colors.border, backgroundColor: active ? colors.successSoft : 'transparent', opacity: pressed ? 0.8 : 1 }]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.memberOptionText, { color: active ? colors.primary : colors.foreground }]} numberOfLines={1}>{item.name}</Text>
+                            <Text style={[styles.memberOptionMeta, { color: colors.mutedForeground }]} numberOfLines={1}>{item.role === 'admin' ? 'Circle admin' : item.role === 'co-admin' ? 'Co-admin' : 'Member'}</Text>
+                          </View>
+                          {active ? <Feather name="check" size={16} color={colors.primary} /> : null}
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              ) : (
+                <Text style={[styles.ledgerHint, { color: colors.mutedForeground }]}>This circle has no members to choose yet.</Text>
+              )
+            ) : null}
+
+            <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>AMOUNT (KSH)</Text>
+            <View style={[styles.inputWrap, { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border }]}>
+              <Text style={[styles.currencyPrefix, { color: colors.mutedForeground }]}>KSh</Text>
+              <TextInput
+                testID="contribution-amount"
+                value={amount}
+                onChangeText={(value) => {
+                  setAmount(value.replace(/[^\d]/g, ''));
+                  if (error) setError('');
+                }}
+                keyboardType="number-pad"
+                placeholder="0"
+                placeholderTextColor={colors.mutedForeground}
+                style={[styles.amountInput, { color: colors.foreground }]}
+              />
+            </View>
+            {numAmount > MAX_KES ? (
+              <Text style={[styles.saveError, { color: colors.destructive }]}>Amount cannot exceed KES 10,000,000.</Text>
+            ) : null}
+            {quickAmounts.length > 0 ? (
+              <View style={styles.amountChips}>
+                {quickAmounts.map((value) => {
+                  const active = amount === String(value);
+                  return (
+                    <Pressable
+                      key={value}
+                      testID={`quick-amount-${value}`}
+                      onPress={() => setAmount(String(value))}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Set the amount to ${value.toLocaleString()} shillings`}
+                      style={({ pressed }) => [styles.amountChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
+                    >
+                      <Text style={[styles.amountChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{value >= 1000 ? `${value / 1000}K` : value}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
+
+            <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>MEMO / NOTES</Text>
+            <TextInput
+              testID="contribution-note"
+              value={note}
+              onChangeText={setNote}
+              placeholder="e.g. Monthly Savings, Welfare assistance, Audit Fees…"
+              placeholderTextColor={colors.mutedForeground}
+              style={[styles.textInput, { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border, color: colors.foreground }]}
+            />
+            {error ? <Text style={[styles.saveError, { color: colors.destructive }]}>{error}</Text> : null}
           </ScrollView>
 
           <Pressable
@@ -2010,4 +2299,19 @@ export const styles = StyleSheet.create({
   skeletonIcon: { width: 40, height: 40, borderRadius: 13 },
   skeletonCopy: { flex: 1 },
   skeletonLine: { height: 11, borderRadius: 6 },
+  summaryIconBox: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  loanTag: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1, borderWidth: 1 },
+  loanTagText: { fontFamily: 'Inter_600SemiBold', fontSize: 10, letterSpacing: 0.3 },
+  detailHeroCard: { borderWidth: 1, borderRadius: 18, padding: 18, alignItems: 'center', marginTop: 12 },
+  detailHeroAmount: { fontFamily: 'Inter_700Bold', fontSize: 28, letterSpacing: -0.8, marginTop: 4 },
+  detailDirectionPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8 },
+  detailDirectionText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 0.8 },
+  detailGrid: { borderWidth: 1, borderRadius: 16, padding: 14, marginTop: 14, gap: 8 },
+  txDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, paddingVertical: 3 },
+  detailLabel: { fontFamily: 'Inter_500Medium', fontSize: 12, minWidth: 90 },
+  detailValue: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5, flex: 1, textAlign: 'right' },
+  detailMono: { fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.5 },
+  detailActions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  detailActionButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderRadius: 14, minHeight: 46 },
+  detailActionText: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
 });

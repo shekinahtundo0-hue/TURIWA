@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { usePathname, useRouter, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -44,51 +44,57 @@ export function AppRail() {
   const width = compact ? RAIL_WIDTH_COMPACT : RAIL_WIDTH_LABELLED;
 
   return (
-    <View
-      style={[
-        styles.rail,
-        { width, backgroundColor: colors.card, borderRightColor: colors.border, paddingTop: insets.top + 18, paddingBottom: insets.bottom + 18 },
-      ]}
-      accessibilityRole="tablist"
-      accessibilityLabel="Main sections"
-    >
-      <View style={[styles.railMark, { backgroundColor: colors.successSoft }]}>
-        <TuriwaLogo size={24} />
-      </View>
-      {railItems.map((item) => {
-        const active = item.name === 'index' ? pathname === '/' : pathname.startsWith(`/${item.name}`);
-        return (
-          <Pressable
-            key={item.name}
-            testID={`rail-${item.name}`}
-            onPress={() => router.push(item.href)}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={item.label}
-            hitSlop={4}
-            style={({ pressed }) => [styles.railItem, { opacity: pressed ? 0.65 : 1 }]}
-          >
-            {active ? <View style={[styles.railIndicator, { backgroundColor: colors.primary }]} /> : null}
-            <Feather name={item.icon} size={19} color={active ? colors.primary : colors.mutedForeground} />
-            {compact ? null : (
-              <Text style={[styles.railLabel, { color: active ? colors.primary : colors.mutedForeground }]}>{item.label}</Text>
-            )}
-          </Pressable>
-        );
-      })}
-      {layout.isDesktop ? (
-        <Pressable
-          testID="rail-toggle"
-          onPress={() => setCollapsed((value) => !value)}
-          accessibilityRole="button"
-          accessibilityLabel={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-          hitSlop={6}
-          style={({ pressed }) => [styles.railItem, { opacity: pressed ? 0.65 : 1, marginTop: 'auto' }]}
-        >
-          <Feather name={collapsed ? 'chevrons-right' : 'chevrons-left'} size={19} color={colors.mutedForeground} />
-          {collapsed ? null : <Text style={[styles.railLabel, { color: colors.mutedForeground }]}>Collapse</Text>}
-        </Pressable>
-      ) : null}
+    <View style={[styles.rail, { width, backgroundColor: colors.card, borderRightColor: colors.border }]}>
+      {/* The rail sits beside a scrolling page but does not scroll with it, so at a short
+          desktop height its own items used to be cut off with no way to reach them: the
+          Profile tab and the collapse control fell below a clipped, unscrollable box. The
+          rail now carries its own scroll area, which only engages once the items need more
+          room than the viewport gives them. */}
+      <ScrollView
+        style={styles.railScroll}
+        contentContainerStyle={[styles.railContent, { paddingTop: insets.top + 18, paddingBottom: insets.bottom + 18 }]}
+        showsVerticalScrollIndicator={Platform.OS === 'web'}
+      >
+        <View style={styles.tablist} accessibilityRole="tablist" accessibilityLabel="Main sections">
+          <View style={[styles.railMark, { backgroundColor: colors.successSoft }]}>
+            <TuriwaLogo size={24} />
+          </View>
+          {railItems.map((item) => {
+            const active = item.name === 'index' ? pathname === '/' : pathname.startsWith(`/${item.name}`);
+            return (
+              <Pressable
+                key={item.name}
+                testID={`rail-${item.name}`}
+                onPress={() => router.push(item.href)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={item.label}
+                hitSlop={4}
+                style={({ pressed }) => [styles.railItem, { opacity: pressed ? 0.65 : 1 }]}
+              >
+                {active ? <View style={[styles.railIndicator, { backgroundColor: colors.primary }]} /> : null}
+                <Feather name={item.icon} size={19} color={active ? colors.primary : colors.mutedForeground} />
+                {compact ? null : (
+                  <Text style={[styles.railLabel, { color: active ? colors.primary : colors.mutedForeground }]}>{item.label}</Text>
+                )}
+              </Pressable>
+            );
+          })}
+          {layout.isDesktop ? (
+            <Pressable
+              testID="rail-toggle"
+              onPress={() => setCollapsed((value) => !value)}
+              accessibilityRole="button"
+              accessibilityLabel={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+              hitSlop={6}
+              style={({ pressed }) => [styles.railItem, { opacity: pressed ? 0.65 : 1, marginTop: 'auto' }]}
+            >
+              <Feather name={collapsed ? 'chevrons-right' : 'chevrons-left'} size={19} color={colors.mutedForeground} />
+              {collapsed ? null : <Text style={[styles.railLabel, { color: colors.mutedForeground }]}>Collapse</Text>}
+            </Pressable>
+          ) : null}
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -112,7 +118,10 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
 const styles = StyleSheet.create({
   row: { flex: 1, flexDirection: 'row' },
   scene: { flex: 1 },
-  rail: { borderRightWidth: 1, alignItems: 'center', gap: 6 },
+  rail: { borderRightWidth: 1 },
+  railScroll: { flex: 1 },
+  railContent: { flexGrow: 1 },
+  tablist: { flexGrow: 1, alignItems: 'center', gap: 6 },
   railMark: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
   railItem: { width: 60, minHeight: 60, borderRadius: 15, alignItems: 'center', justifyContent: 'center', gap: 4, position: 'relative' },
   railIndicator: { position: 'absolute', left: 0, top: 16, bottom: 16, width: 3, borderRadius: 2 },
