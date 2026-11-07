@@ -33,9 +33,11 @@ export type LedgerType = (typeof LEDGER_TYPES)[number];
 // the API when a loan's money actually moves, so nobody can record a payout that
 // no loan backs, or leave one out and make the fund look larger than it is. A fine
 // is written by the admin action on a circle, so it always names a member and the
-// cycle they missed.
+// cycle they missed. A repayment is in the same family as the payout: the loan
+// writes it while lowering its own balance, so a hand-typed one would be cash the
+// group booked as collected while the borrower's balance still showed the debt.
 export const RECORDABLE_LEDGER_TYPES = LEDGER_TYPES.filter(
-  (type) => type !== "LoanDisbursement" && type !== "Fine",
+  (type) => type !== "LoanDisbursement" && type !== "Fine" && type !== "Repayment",
 );
 export type RecordableLedgerType = (typeof RECORDABLE_LEDGER_TYPES)[number];
 

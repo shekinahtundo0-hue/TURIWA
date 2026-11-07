@@ -219,6 +219,13 @@ export async function ensureSchema(db: AppDb): Promise<void> {
   await db.execute(sql`UPDATE loans SET total_payable = GREATEST(monthly_repayment * months, principal) WHERE total_payable = 0`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS loans_user_id_idx ON loans (user_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS contributions_circle_id_idx ON contributions (circle_id)`);
+  // Every read of a member's book filters these columns: their own loans plus the loans
+  // of the groups they administer (`/state`), the pending queue by status, and the overdue
+  // sweep by due day. The ledger rows a loan writes are found by the loan they belong to.
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS loans_circle_id_idx ON loans (circle_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS loans_status_idx ON loans (status)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS loans_due_on_idx ON loans (due_on)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS contributions_loan_id_idx ON contributions (loan_id)`);
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,

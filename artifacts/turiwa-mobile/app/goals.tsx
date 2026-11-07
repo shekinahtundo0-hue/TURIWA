@@ -17,6 +17,7 @@ export default function GoalsScreen() {
   const onBack = useSubScreenBack();
   const [goalRows, setGoalRows] = useState<api.SavingsGoalRecord[] | null>(null);
   const [error, setError] = useState('');
+  const [retryable, setRetryable] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -25,6 +26,7 @@ export default function GoalsScreen() {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load savings goals.');
+      setRetryable(api.isRetryable(err));
       setGoalRows([]);
     }
   }, [circles]);
@@ -48,7 +50,7 @@ export default function GoalsScreen() {
             onAction={() => router.push('/(onboarding)/create-group')}
           />
         ) : error ? (
-          <EmptyState icon="alert-triangle" title="Goals could not be loaded" body={`${error} Pull down on this screen to try again.`} />
+          <EmptyState icon="alert-triangle" title="Goals could not be loaded" body={retryable ? `${error} Pull down on this screen to try again.` : error} />
         ) : goalRows.length === 0 ? (
           <EmptyState
             icon="target"

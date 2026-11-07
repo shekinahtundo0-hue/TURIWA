@@ -103,8 +103,19 @@ router.post("/contributions", requireAuth, async (req, res) => {
   const note = String(req.body?.note ?? "Contribution").trim().slice(0, 160) || "Contribution";
   const circleId = String(req.body?.circleId ?? "").slice(0, 80);
   const requestedType = String(req.body?.type ?? "Contribution");
-  // A loan disbursement is written by the loan itself, so a hand-typed one is read
-  // as an ordinary contribution rather than a payout nobody owes the fund for.
+  // A loan's own money — the payout and every repayment — is written by the loan, inside
+  // the same transaction that moves its balance. A hand-typed row of either kind would
+  // change the group's cash while the borrower's balance stayed where it was, which is how
+  // a fund ends up reading "repaid" on one screen and still owed on another. So both are
+  // refused with the way to do it properly, rather than quietly relabelled as a contribution.
+  if (requestedType === "Repayment" || requestedType === "LoanDisbursement") {
+    res.status(400).json({
+      message: requestedType === "Repayment"
+        ? "A repayment belongs to a loan: open that loan and use Record repayment, so the money coming in brings its balance down with it."
+        : "A loan writes its own payout row when the money is handed over, so it cannot be typed into the ledger.",
+    });
+    return;
+  }
   const type = RECORDABLE_LEDGER_TYPES.includes(requestedType as RecordableLedgerType)
     ? (requestedType as RecordableLedgerType)
     : "Contribution";
@@ -150,12 +161,12 @@ router.post("/contributions", requireAuth, async (req, res) => {
   });
   const actor = (req as AuthedRequest).user!.name;
   const who = recordedMember ?? actor;
-  if (type === "Contribution" || type === "Repayment") {
+  if (type === "Contribution") {
     await notifyManagers(circle, {
       exceptUserId: userId,
       type: "contribution",
       title: `${who} paid into ${circle.name}`,
-      body: `${kes(Math.round(amount))} recorded as a ${type === "Repayment" ? "loan repayment" : "contribution"}.`,
+      body: `${kes(Math.round(amount))} recorded as a contribution.`,
       link: "/activity",
       entityId: entryId,
     });

@@ -90,10 +90,12 @@ export type CircleRole = 'admin' | 'co-admin' | 'member';
 // expects back as repayments.
 export const LEDGER_TYPES = ['Contribution', 'Expense', 'Repayment', 'Welfare', 'Fine', 'LoanDisbursement'] as const;
 export type LedgerType = (typeof LEDGER_TYPES)[number];
-// A loan disbursement is written by the loan it belongs to and a fine by the admin
-// action on a circle, never typed in by hand: a typed fine would name no member and
-// no cycle, and a typed payout no loan backs.
-export const RECORDABLE_LEDGER_TYPES = LEDGER_TYPES.filter((type) => type !== 'LoanDisbursement' && type !== 'Fine');
+// A loan disbursement and a repayment are both written by the loan they belong to, in
+// the same call that moves its balance, and a fine by the admin action on a circle —
+// never typed in by hand: a typed fine would name no member and no cycle, a typed
+// payout no loan backs, and a typed repayment would raise the group's cash while the
+// borrower's balance still showed the money owing.
+export const RECORDABLE_LEDGER_TYPES = LEDGER_TYPES.filter((type) => type !== 'LoanDisbursement' && type !== 'Fine' && type !== 'Repayment');
 export const isOutflow = (type: LedgerType) => type === 'Expense';
 export const isSetAside = (type: LedgerType) => type === 'Welfare';
 /** Money the fund handed over for a loan and is waiting to receive back. */
@@ -196,8 +198,13 @@ export const entryDate = (item: Pick<Contribution, 'date' | 'createdAt'>) => {
 };
 
 /** The calendar month a row falls in, as `2026-10`, so a period total is a sum of
- *  rows rather than a claim about them. */
-export const monthKey = (item: Pick<Contribution, 'createdAt'>) => item.createdAt.slice(0, 7);
+ *  rows rather than a claim about them. Read from the device's own calendar, like
+ *  `isoToday`: `createdAt` arrives as UTC, and slicing it would file an entry recorded
+ *  at 01:30 in Nairobi on the first of a month into the month before it. */
+export const monthKey = (item: Pick<Contribution, 'createdAt'>) => {
+  const at = new Date(item.createdAt);
+  return Number.isNaN(at.getTime()) ? item.createdAt.slice(0, 7) : currentMonthKey(at);
+};
 
 /** `2026-10` for the month that is now, in the device's own timezone. */
 export const currentMonthKey = (at: Date = new Date()) =>
@@ -395,9 +402,22 @@ async function parseError(response: Response): Promise<string> {
     const data = (await response.json()) as { message?: string };
     if (data?.message) return data.message;
   } catch {
-    // ignore
+    // Only our own responses are JSON. A bare 404 page from the host is HTML, so the status decides.
+  }
+  // 404 and 501 mean the request reached Turiwa and the server answered — with a route the running
+  // build does not have. "Could not reach" sends a member to pull-to-refresh, which repeats a
+  // failure no refresh can fix.
+  if (response.status === 404 || response.status === 501) {
+    return 'This part of Turiwa is not on the server yet, so it cannot be loaded here.';
   }
   return `Could not reach Turiwa (${response.status})`;
+}
+
+/** Whether telling the member to refresh is honest advice. A missing route, a rejected permission
+ *  or a validation error all answer the same way every time; only a network or server blip heals. */
+export function isRetryable(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return true;
+  return !(err.status === 404 || err.status === 501 || err.status === 400 || err.status === 403);
 }
 
 // Whatever screen started the call keeps its spinner until this promise settles, so a request

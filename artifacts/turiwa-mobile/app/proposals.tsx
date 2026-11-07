@@ -16,6 +16,7 @@ export default function ProposalsScreen() {
   const onBack = useSubScreenBack();
   const [rows, setRows] = useState<api.ProposalRecord[] | null>(null);
   const [error, setError] = useState('');
+  const [retryable, setRetryable] = useState(true);
   const [voting, setVoting] = useState('');
 
   const load = useCallback(async () => {
@@ -24,6 +25,7 @@ export default function ProposalsScreen() {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load proposals.');
+      setRetryable(api.isRetryable(err));
       setRows([]);
     }
   }, [circles]);
@@ -60,7 +62,7 @@ export default function ProposalsScreen() {
             onAction={() => router.push('/(onboarding)/create-group')}
           />
         ) : error ? (
-          <EmptyState icon="alert-triangle" title="Proposals could not be loaded" body={`${error} Pull down on this screen to try again.`} />
+          <EmptyState icon="alert-triangle" title="Proposals could not be loaded" body={retryable ? `${error} Pull down on this screen to try again.` : error} />
         ) : rows.length === 0 ? (
           <EmptyState icon="check-square" title="No proposals open" body="When the circle puts a decision to a vote it appears here with its options and deadline." />
         ) : (

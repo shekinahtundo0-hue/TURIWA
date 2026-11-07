@@ -16,6 +16,7 @@ export default function MeetingsScreen() {
   const onBack = useSubScreenBack();
   const [rows, setRows] = useState<api.MeetingRecord[] | null>(null);
   const [error, setError] = useState('');
+  const [retryable, setRetryable] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -23,6 +24,7 @@ export default function MeetingsScreen() {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load meetings.');
+      setRetryable(api.isRetryable(err));
       setRows([]);
     }
   }, [circles]);
@@ -55,7 +57,7 @@ export default function MeetingsScreen() {
             onAction={() => router.push('/(onboarding)/create-group')}
           />
         ) : error ? (
-          <EmptyState icon="alert-triangle" title="Meetings could not be loaded" body={`${error} Pull down on this screen to try again.`} />
+          <EmptyState icon="alert-triangle" title="Meetings could not be loaded" body={retryable ? `${error} Pull down on this screen to try again.` : error} />
         ) : rows.length === 0 ? (
           <EmptyState icon="calendar" title="No meetings scheduled" body="When a treasurer schedules a meeting it appears here with its agenda." />
         ) : (

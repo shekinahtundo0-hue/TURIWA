@@ -199,47 +199,6 @@ export function SectionHeading({ title, action, onAction }: { title: string; act
 }
 
 /**
- * Which set of books a screen is reading: the chosen circle's, or every circle the
- * account has. Both are honest sums, so the choice is stated in the control rather
- * than left for the reader to guess — and a long circle name truncates inside its own
- * half of the row instead of pushing the layout sideways.
- */
-export function CircleScopeToggle({ circleName, scopeAll, onChange }: { circleName: string | null; scopeAll: boolean; onChange: (scopeAll: boolean) => void }) {
-  const colors = useColors();
-  const activeTone = colors.primaryForeground;
-  const idleTone = colors.mutedForeground;
-  return (
-    <View style={[styles.scopeRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <Pressable
-        testID="scope-circle"
-        accessibilityRole="button"
-        accessibilityState={{ selected: !scopeAll, disabled: circleName === null }}
-        accessibilityLabel={circleName ? `Show only ${circleName}` : 'No circle is selected'}
-        disabled={circleName === null}
-        onPress={() => onChange(false)}
-        style={({ pressed }) => [styles.scopeChip, { borderColor: colors.border, backgroundColor: !scopeAll ? colors.primary : 'transparent', opacity: circleName === null ? 0.45 : pressed ? 0.85 : 1 }]}
-      >
-        <Text style={[styles.scopeChipText, { color: !scopeAll ? activeTone : idleTone }]} numberOfLines={1}>
-          {circleName ?? 'This circle'}
-        </Text>
-      </Pressable>
-      <Pressable
-        testID="scope-all"
-        accessibilityRole="button"
-        accessibilityState={{ selected: scopeAll }}
-        accessibilityLabel="Show every circle on this account"
-        onPress={() => onChange(true)}
-        style={({ pressed }) => [styles.scopeChip, { borderColor: colors.border, backgroundColor: scopeAll ? colors.primary : 'transparent', opacity: pressed ? 0.85 : 1 }]}
-      >
-        <Text style={[styles.scopeChipText, { color: scopeAll ? activeTone : idleTone }]} numberOfLines={1}>
-          All circles
-        </Text>
-      </Pressable>
-    </View>
-  );
-}
-
-/**
  * The one empty state, so a screen with nothing to show reads the same everywhere:
  * what is missing, why, and the way to change it.
  */
@@ -574,12 +533,14 @@ export function TransactionDetailModal({
   onClose,
   transaction,
   circleName,
+  loan,
   onViewLoan,
 }: {
   visible: boolean;
   onClose: () => void;
   transaction: Contribution | null;
   circleName?: string;
+  loan?: Loan | null;
   onViewLoan?: (loanId: string) => void;
 }) {
   const colors = useColors();
@@ -687,9 +648,17 @@ export function TransactionDetailModal({
               {isLoan && transaction.loanId ? (
                 <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
                   <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Linked Loan</Text>
-                  <Text style={[styles.detailValue, styles.detailMono, { color: colors.primary }]} numberOfLines={1}>
-                    {transaction.loanId}
-                  </Text>
+                  {loan ? (
+                    <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={2}>
+                      {loan.applicantName} · {kesLabel(loan.balance)} still owing · {loan.status}
+                    </Text>
+                  ) : (
+                    // The row points at a loan this account cannot see, so say which one rather
+                    // than pretending the reference is information a member can use.
+                    <Text style={[styles.detailValue, styles.detailMono, { color: colors.primary }]} numberOfLines={1}>
+                      {transaction.loanId}
+                    </Text>
+                  )}
                 </View>
               ) : null}
             </View>
@@ -2106,9 +2075,6 @@ export const styles = StyleSheet.create({
   notificationBadge: { position: 'absolute', right: 3, top: 3, minWidth: 17, height: 17, borderRadius: 9, borderWidth: 1.5, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
   notificationBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 11, lineHeight: 13 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 28, marginBottom: 13 },
-  scopeRow: { flexDirection: 'row', gap: 8, marginBottom: 12, borderWidth: 1, borderRadius: 14, padding: 4 },
-  scopeChip: { flexGrow: 1, flexBasis: 0, minWidth: 0, minHeight: 44, borderRadius: 11, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  scopeChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5, textAlign: 'center' },
   sectionTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 17, letterSpacing: -0.2 },
   sectionAction: { minHeight: 44, paddingLeft: 12, alignItems: 'flex-end', justifyContent: 'center' },
   actionText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },

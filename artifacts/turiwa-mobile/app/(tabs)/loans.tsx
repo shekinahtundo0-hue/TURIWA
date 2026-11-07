@@ -11,7 +11,7 @@ import type { Circle } from '@/lib/api';
 import { isOverdue, kesLabel, MIN_LOAN, interestLabel } from '@/lib/api';
 import { quoteLoan } from '@/lib/loanMath';
 import { loanTie } from '@/lib/statement';
-import { BrandHeader, CircleScopeToggle, PrimaryButton, Screen, ScreenSkeleton, SectionHeading, useSheet, styles as uiStyles } from '@/components/TuriwaUI';
+import { BrandHeader, PrimaryButton, Screen, ScreenSkeleton, SectionHeading, useSheet, styles as uiStyles } from '@/components/TuriwaUI';
 import { CircleSwitcher } from '@/components/CircleSwitcher';
 
 const newApplicationKey = () => `loan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -19,13 +19,11 @@ const newApplicationKey = () => `loan-${Date.now().toString(36)}-${Math.random()
 export default function LoansScreen() {
   const colors = useColors();
   const { isDark } = useTheme();
-  const { circleId: requestedCircleId } = useLocalSearchParams<{ circleId?: string }>();
+  const { circleId: requestedCircleId, loanId: requestedLoanId } = useLocalSearchParams<{ circleId?: string; loanId?: string }>();
   const { loans, circles, finance, activeCircle, activeFinance, applyForLoan, repayLoan, approveLoan, rejectLoan, user, hydrated } = useTuriwa();
   const [applicationVisible, setApplicationVisible] = useState(false);
-  // Credit is decided circle by circle, so the screen reads one circle's book by
-  // default and the whole fund is one tap away for anyone who administers several.
-  const [scopeAll, setScopeAll] = useState(false);
-  const scoped = scopeAll ? null : activeCircle;
+  // Credit is decided circle by circle, so the screen reads the circle the person is in.
+  const scoped = activeCircle;
   const view = scoped ? (activeFinance ?? finance) : finance;
   const inScope = (loan: { circleId: string | null }) => !scoped || loan.circleId === scoped.id;
   const [repaymentFor, setRepaymentFor] = useState<Loan | null>(null);
@@ -39,6 +37,7 @@ export default function LoansScreen() {
   const [reviewRate, setReviewRate] = useState('5');
   const [rejectionReason, setRejectionReason] = useState('');
   const autoOpenedForCircle = useRef(false);
+  const autoOpenedForLoan = useRef(false);
 
   // Which circles this account administers is read from each circle's own roster — the
   // same record the API checks — so a Co-Admin promoted after joining is offered the
@@ -80,6 +79,17 @@ export default function LoansScreen() {
     setRejectionReason('');
     setApprovalFeedback(null);
   };
+
+  // A ledger row that belongs to a loan already names it, so "View Loan" arrives on that
+  // loan's own sheet instead of dropping the member on this screen with a reference to hunt for.
+  useEffect(() => {
+    if (autoOpenedForLoan.current || !requestedLoanId) return;
+    const loan = loans.find((item) => item.id === requestedLoanId);
+    if (!loan) return;
+    autoOpenedForLoan.current = true;
+    if (loan.status === 'Pending') openReview(loan);
+    else setRepaymentFor(loan);
+  }, [loans, requestedLoanId]);
 
   const handleApprove = async (loanId: string) => {
     if (approvingLoanId || rejectingLoanId) return;
@@ -178,9 +188,6 @@ export default function LoansScreen() {
             </View>
           </View>
         </LinearGradient>
-        {circles.length > 1 ? (
-          <CircleScopeToggle circleName={activeCircle?.name ?? null} scopeAll={scopeAll} onChange={setScopeAll} />
-        ) : null}
         <View style={styles.loanActions}>
           <View style={{ flex: 1 }}><PrimaryButton label="Request a loan" icon="plus" onPress={() => setApplicationVisible(true)} /></View>
           <Pressable onPress={() => setHistoryVisible(true)} style={({ pressed }) => [styles.historyButton, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}><Feather name="clock" size={17} color={colors.primary} /><Text style={[styles.historyText, { color: colors.primary }]}>History</Text></Pressable>

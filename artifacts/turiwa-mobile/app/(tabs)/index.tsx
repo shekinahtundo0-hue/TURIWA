@@ -17,7 +17,6 @@ import {
   BrandHeader,
   CircleCard,
   CircleDetailModal,
-  CircleScopeToggle,
   NotificationsModal,
   PrimaryButton,
   RecordTransactionModal,
@@ -48,12 +47,9 @@ export default function HomeScreen() {
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [detailCircle, setDetailCircle] = useState<Circle | null>(null);
   const [showAll, setShowAll] = useState(false);
-  // Which set of books this screen is reading. The active circle's own figures are the
-  // default because that is the circle the person chose to work in; the whole fund is
-  // still one tap away, and the hero names whichever of the two is on screen, so a
-  // number is never shown under the wrong owner.
-  const [scopeAll, setScopeAll] = useState(false);
-  const scoped = scopeAll ? null : activeCircle;
+  // The screen reads the circle the person chose to work in. With no circle chosen there
+  // is nothing to scope to, and the account's own figures stand in.
+  const scoped = activeCircle;
   const view = scoped ? (activeFinance ?? finance) : finance;
   const ledgerRows = useMemo(
     () => (scoped ? contributions.filter((row) => row.circleId === scoped.id) : contributions),
@@ -119,9 +115,6 @@ export default function HomeScreen() {
           actions={<CircleSwitcher />}
         />
         <View style={[styles.overview, wide && styles.overviewWide]}>
-          {circles.length > 1 ? (
-            <CircleScopeToggle circleName={activeCircle?.name ?? null} scopeAll={scopeAll} onChange={setScopeAll} />
-          ) : null}
           <View style={[styles.heroWrap, wide && styles.heroWrapWide]}>
             <LinearGradient
               colors={isDark ? ['#051811', '#0B2D21'] : ['#022E20', '#04432F']}
