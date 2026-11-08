@@ -757,7 +757,7 @@ router.post("/loans", requireAuth, async (req, res) => {
     // An approved request and the cash it handed over are one decision: both are written
     // inside this transaction, so the loan can never be Active without its payout, and
     // the payout id is built from the loan id, so it cannot be written twice.
-    if (decidesAlone) await recordLoanDisbursement(createdLoan, "Just now", tx);
+    if (decidesAlone) await recordLoanDisbursement(createdLoan, "Just now", tx, { recordedBy: userId });
     return {
       ok: true as const,
       loanId: createdLoan.id,
@@ -819,7 +819,19 @@ router.post("/loans/:id/repay", requireAuth, async (req, res) => {
   const loanId = String(req.params.id);
   const requestKey = String(req.body?.idempotencyKey ?? "").trim();
   if (requestKey && !/^[A-Za-z0-9._:-]{8,100}$/.test(requestKey)) {
-    res.status(400).json({ message: "That repayment reference is invalid. Please try again." });
+    res.status(400).json({ message: "That repayment attempt reference is invalid. Please try again." });
+    return;
+  }
+  // How the cash arrived and the slip that names it, both optional. They are stored on
+  // the ledger row as typed, so a group's own wording survives the record.
+  const method = String(req.body?.method ?? "").trim();
+  const reference = String(req.body?.reference ?? "").trim();
+  if (method.length > 40) {
+    res.status(400).json({ message: "Keep the payment method under 40 characters." });
+    return;
+  }
+  if (reference.length > 60) {
+    res.status(400).json({ message: "Keep the payment reference under 60 characters." });
     return;
   }
   const repaymentEntryId = requestKey ? `loan-repay-${loanId}-${requestKey}` : newId("loan-repay");
@@ -842,7 +854,7 @@ router.post("/loans/:id/repay", requireAuth, async (req, res) => {
     const balance = loan.balance - paid;
     await tx.update(loansTable).set({ balance, status: balance === 0 ? "Paid off" : "Active" })
       .where(and(eq(loansTable.id, loanId), eq(loansTable.userId, userId)));
-    await recordLoanRepayment(loan, paid, tx, repaymentEntryId);
+    await recordLoanRepayment(loan, paid, tx, repaymentEntryId, { recordedBy: userId, method, reference });
     const [circle] = loan.circleId
       ? await tx.select().from(circlesTable).where(eq(circlesTable.id, loan.circleId)).limit(1)
       : [];
@@ -907,12 +919,11 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
   const result = await db.transaction(async (tx) => {
     const loanIdRow = await tx.select({ circleId: loansTable.circleId }).from(loansTable).where(eq(loansTable.id, loanId)).limit(1);
     if (!loanIdRow[0]) return { error: "That loan could not be found.", status: 404 as const };
-    if (!loanIdRow[0].circleId) return { error: "A loan request must belong to a circle with an independent admin reviewer.", status: 403 as const };
+    if (!loanIdRow[0].circleId) return { error: "A loan request must belong to a circle before it can be approved.", status: 403 as const };
     const [circle] = await tx.select().from(circlesTable).where(eq(circlesTable.id, loanIdRow[0].circleId)).for("update").limit(1);
     if (!circle || !canManageCircle(circle, userId)) return { error: "Only this circle's admin can approve its loan requests.", status: 403 as const };
     const [loan] = await tx.select().from(loansTable).where(eq(loansTable.id, loanId)).for("update").limit(1);
     if (!loan) return { error: "That loan could not be found.", status: 404 as const };
-    if (loan.userId === userId) return { error: "You cannot review your own loan application.", status: 403 as const };
     if (loan.status !== "Pending") return { error: "This loan request has already been decided.", status: 409 as const };
     const cash = await circleCash(circle.id, tx);
     if (amount > cash) return { error: `The group holds ${kes(cash)}, which is less than the ${kes(amount)} this loan would hand over.`, status: 400 as const };
@@ -928,7 +939,7 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
       dueDate: formatDay(due), dueOn: isoDay(due), reviewedBy: userId, reviewedAt, rejectionReason: null,
     }).where(and(eq(loansTable.id, loanId), eq(loansTable.status, "Pending"))).returning();
     if (!approved) return { error: "This loan request has already been decided.", status: 409 as const };
-    await recordLoanDisbursement(approved, "Just now", tx);
+    await recordLoanDisbursement(approved, "Just now", tx, { recordedBy: userId });
     return { ok: true as const, approved, circle };
   });
   if ("error" in result) {
@@ -967,7 +978,6 @@ router.post("/loans/:id/reject", requireAuth, async (req, res) => {
     if (!circle || !canManageCircle(circle, userId)) return { error: "Only this circle's admin can reject its loan requests.", status: 403 as const };
     const [loan] = await tx.select().from(loansTable).where(eq(loansTable.id, loanId)).for("update").limit(1);
     if (!loan) return { error: "That loan request could not be found.", status: 404 as const };
-    if (loan.userId === userId) return { error: "You cannot reject your own loan application.", status: 403 as const };
     if (loan.status !== "Pending") return { error: "Only a pending loan request can be rejected.", status: 409 as const };
     await tx.update(loansTable).set({ status: "Rejected", reviewedBy: userId, reviewedAt: new Date(), rejectionReason: reason })
       .where(and(eq(loansTable.id, loanId), eq(loansTable.status, "Pending")));

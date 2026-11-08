@@ -111,6 +111,15 @@ export type AppState = {
     type: LedgerType;
     member: string | null;
     loanId: string | null;
+    /** The account that recorded the entry, and the name to show for it. Both null for
+     *  rows written before the app asked — a repair or an older build recorded the money,
+     *  not a person, and nothing on screen claims otherwise. */
+    recordedBy: string | null;
+    recordedByName: string | null;
+    /** How the money arrived, in the recorder's own words, plus the slip that names it
+     *  (a mobile-money confirmation, a cheque number). Optional at both ends. */
+    method: string | null;
+    reference: string | null;
     // When the row was written, as the database recorded it. The `date` column is
     // what a saver typed or an older build stored, so a screen that needs to put an
     // entry in time — a month's total, a list in order — reads this instead.
@@ -286,6 +295,9 @@ export async function getState(userId: string): Promise<AppState> {
   const relatedUserIds = [...new Set([
     ...loans.map((loan) => loan.userId).filter((id): id is string => Boolean(id)),
     ...loans.map((loan) => loan.reviewedBy).filter((id): id is string => Boolean(id)),
+    // The hand that recorded a ledger row, so the entry can name its author instead of
+    // showing a user id nobody can read.
+    ...contributions.map((item) => item.recordedBy).filter((id): id is string => Boolean(id)),
   ])];
   const relatedUsers = relatedUserIds.length
     ? await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable).where(inArray(usersTable.id, relatedUserIds))
@@ -378,6 +390,13 @@ export async function getState(userId: string): Promise<AppState> {
       type: asLedgerType(item.type),
       member: item.member ?? null,
       loanId: item.loanId ?? null,
+      // Who typed the entry, and how they say the money arrived. Empty on every row
+      // written before these were recorded, which the screens show as nothing rather
+      // than as a guess.
+      recordedBy: item.recordedBy ?? null,
+      recordedByName: item.recordedBy ? relatedNames.get(item.recordedBy) ?? null : null,
+      method: item.method ?? null,
+      reference: item.reference ?? null,
       createdAt: (item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt)).toISOString(),
     })),
     loans: loans.map((loan) => ({

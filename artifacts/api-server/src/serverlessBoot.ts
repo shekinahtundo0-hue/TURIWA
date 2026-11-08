@@ -112,10 +112,9 @@ export function bootServer(): Promise<Express> {
 }
 
 async function open(): Promise<Express> {
-  const [{ default: app }, db, { linkExistingLoans }, { logger }] = await Promise.all([
+  const [{ default: app }, db, { logger }] = await Promise.all([
     import("./app"),
     import("@workspace/db"),
-    import("./lib/loanLedger"),
     import("./lib/logger"),
   ]);
 
@@ -130,15 +129,29 @@ async function open(): Promise<Express> {
   // the opposite of what a real member's first screen should show.
   await db.initDb({ seedWhenEmpty: false });
 
-  // Money a loan moved is ledger history, so the group's cash figure is the sum of its
-  // entries. Idempotent: the entries are keyed to the loan's own id, so a container that
-  // warms twice a day cannot double-count.
-  const { linked, ungrouped } = await linkExistingLoans();
-  logger.info({ driver, linked, ungrouped }, "serverless API ready");
+  // The loan ledger reconciliation is deliberately not run here. It reads every loan and then
+  // two queries per loan, so on a cold isolate it sat inside the first member's request and
+  // added to the round trips that were already making it time out. Every loan written through
+  // this API records its own ledger entries as it is approved, repaid or closed, so a hosted
+  // database needs the backfill only once, by hand:
+  //   pnpm --filter @workspace/api-server exec node dist/index.mjs --reconcile-loan-ledger
+  logger.info({ driver }, "serverless API ready");
 
   // The live change bus is deliberately not started here: it keeps a dedicated Postgres
   // connection open to hear LISTEN notifications, and there is no long-lived request to
   // carry a change to. The stream route says so, and the app polls.
 
   return app;
+}
+
+/**
+ * What `/api/readyz` asks: bring the isolate up and actually put a query to the database.
+ * `/api/healthz` only proves a process woke, which is not the question an operator is asking
+ * when a member's screen is spinning.
+ */
+export async function probeDatabase(): Promise<void> {
+  await bootServer();
+  const { sql } = await import("drizzle-orm");
+  const { getDb } = await import("@workspace/db");
+  await getDb().execute(sql`SELECT 1`);
 }

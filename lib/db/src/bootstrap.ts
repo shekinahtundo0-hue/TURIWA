@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { circlesTable, contributionsTable, loansTable, usersTable } from "./schema";
+import { appMetaTable, circlesTable, contributionsTable, loansTable, usersTable } from "./schema";
 import type { AppDb } from "./client";
 
 const DEMO_PHONE = "+254712345678";
@@ -30,7 +30,50 @@ function monthlyHistory(circleId: string, amount: number, cycles: number, note =
   });
 }
 
+// The shape of the schema, marked in the database so the statements below run once per shape
+// instead of once per process.
+//
+// They used to run on every boot. Each one is a round trip to Postgres and there are over ninety
+// of them, so on a hosted database reached over the network a cold isolate spent that whole time
+// inside the first member's request — long enough for the app to give up and show a spinner. A
+// serverless host starts a fresh isolate whenever it has been quiet, which is why the same screen
+// worked after a second attempt.
+//
+// The marker lives in app_meta, so it is restored with the data it describes: an older backup
+// comes back with its own older marker and the statements run again over it, which is what a
+// restore needs.
+//
+// Bump SCHEMA_SHAPE every time a statement in createSchema changes, otherwise the change is
+// never sent to a database that already carries the current marker. `pnpm run check:schema-shape`
+// fails when the statements moved and the marker did not.
+const SCHEMA_SHAPE_KEY = "schema_shape";
+const SCHEMA_SHAPE = "1";
+
 export async function ensureSchema(db: AppDb): Promise<void> {
+  // The marker outlinks the statements that used to create it, so it is made here first.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+  const marked = await db
+    .select({ value: appMetaTable.value })
+    .from(appMetaTable)
+    .where(eq(appMetaTable.key, SCHEMA_SHAPE_KEY))
+    .limit(1);
+  if (marked[0]?.value === SCHEMA_SHAPE) return;
+
+  await createSchema(db);
+
+  // Only once the whole shape is in place: a body that failed halfway must be retried in full.
+  await db
+    .insert(appMetaTable)
+    .values({ key: SCHEMA_SHAPE_KEY, value: SCHEMA_SHAPE })
+    .onConflictDoUpdate({ target: appMetaTable.key, set: { value: SCHEMA_SHAPE } });
+}
+
+async function createSchema(db: AppDb): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -161,17 +204,16 @@ export async function ensureSchema(db: AppDb): Promise<void> {
       application_key TEXT
     )
   `);
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS app_meta (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
   // Rows written before ownership existed get the columns the upgrade needs.
   await db.execute(sql`ALTER TABLE contributions ADD COLUMN IF NOT EXISTS user_id TEXT`);
   await db.execute(sql`ALTER TABLE contributions ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'Contribution'`);
   await db.execute(sql`ALTER TABLE contributions ADD COLUMN IF NOT EXISTS member TEXT`);
   await db.execute(sql`ALTER TABLE contributions ADD COLUMN IF NOT EXISTS loan_id TEXT`);
+  // The three audit columns a loan repayment needs. Older rows keep them empty rather
+  // than being filled with a guess about who typed what ten months ago.
+  await db.execute(sql`ALTER TABLE contributions ADD COLUMN IF NOT EXISTS recorded_by TEXT`);
+  await db.execute(sql`ALTER TABLE contributions ADD COLUMN IF NOT EXISTS method TEXT`);
+  await db.execute(sql`ALTER TABLE contributions ADD COLUMN IF NOT EXISTS reference TEXT`);
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS user_id TEXT`);
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS circle_id TEXT`);
   await db.execute(sql`ALTER TABLE loans ADD COLUMN IF NOT EXISTS total_payable INTEGER NOT NULL DEFAULT 0`);

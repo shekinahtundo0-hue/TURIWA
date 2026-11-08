@@ -119,7 +119,7 @@ type TuriwaContextValue = {
   setCircleFine: (circleId: string, lateFine: number) => Promise<void>;
   applyFine: (circleId: string, memberId: string) => Promise<void>;
   applyForLoan: (amount: number, purpose: string, circleId: string, preferredMonths: number, applicationKey?: string) => Promise<void>;
-  repayLoan: (amount: number, loanId?: string, idempotencyKey?: string) => Promise<void>;
+  repayLoan: (amount: number, loanId?: string, idempotencyKey?: string, audit?: { method?: string; reference?: string }) => Promise<void>;
   approveLoan: (loanId: string, terms: { amount: number; months: number; interestRate: number }) => Promise<void>;
   rejectLoan: (loanId: string, reason: string) => Promise<void>;
   removeCircleMember: (circleId: string, memberId: string) => Promise<void>;
@@ -626,11 +626,11 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     await applyState(await api.applyForLoan(amount, purpose, circleId, preferredMonths, applicationKey));
   };
 
-  const repayLoan = async (amount: number, loanId?: string, idempotencyKey?: string) => {
+  const repayLoan = async (amount: number, loanId?: string, idempotencyKey?: string, audit?: { method?: string; reference?: string }) => {
     if (!loanId) throw new Error('Choose the loan you are repaying and try again.');
     const target = loans.find((loan) => loan.id === loanId);
     if (!target || target.status !== 'Active') throw new Error('This loan is no longer active. Refresh the loan list and try again.');
-    await applyState(await api.repayLoan(target.id, amount, idempotencyKey));
+    await applyState(await api.repayLoan(target.id, amount, idempotencyKey, audit));
   };
 
   // Administrator approval of pending loans. The server's answer is the state: a

@@ -16,6 +16,11 @@ import { CircleSwitcher } from '@/components/CircleSwitcher';
 
 const newApplicationKey = () => `loan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
+/** How the cash reached the group, in the words a treasurer would recognise. Stored as a
+ *  label only — Turiwa moves no money itself, so picking one claims nothing about a
+ *  payment having been made through a provider. */
+const REPAYMENT_METHODS = ['Cash', 'Mobile money', 'Bank transfer', 'Cheque'];
+
 export default function LoansScreen() {
   const colors = useColors();
   const { isDark } = useTheme();
@@ -247,13 +252,7 @@ export default function LoansScreen() {
                     <Text style={[styles.adminApprovalMeta, { color: colors.mutedForeground, marginTop: 8 }]}>
                       Applied by {loan.applicantName} · {formatSubmittedAt(loan.submittedAt)}
                     </Text>
-                    {loan.applicantId === user?.id ? (
-                      <Text style={[styles.pendingNote, { color: colors.accentForeground }]}>
-                        This is your own application, so it is not yours to decide here. Another admin of
-                        {' '}{circle?.name ?? 'the group'} can review it — an administrator's request is normally
-                        approved as it is sent, so this one reached the group before you administered it.
-                      </Text>
-                    ) : reviewingLoanId === loan.id ? (
+                    {reviewingLoanId === loan.id ? (
                       <View style={styles.reviewFields}>
                         <Text style={[styles.adminApprovalMeta, { color: colors.mutedForeground }]}>
                           Requested KES {loan.requestedPrincipal.toLocaleString()} over {loan.requestedMonths} months at {interestLabel(loan.interestRate, loan.interestPeriod)}. Approve with the same terms or adjust them below.
@@ -363,7 +362,7 @@ export default function LoansScreen() {
         </View>
       </Screen>
       <LoanApplicationModal visible={applicationVisible} circles={circles} finance={finance} userId={user?.id ?? ''} initialCircleId={requestedCircleId ?? activeCircle?.id} onClose={() => setApplicationVisible(false)} onSave={applyForLoan} />
-      <RepaymentModal visible={repaymentFor !== null} loan={repaymentFor ?? undefined} onClose={() => setRepaymentFor(null)} onSave={(amount, key) => repaymentFor ? repayLoan(amount, repaymentFor.id, key) : Promise.reject(new Error('Choose a loan to repay.'))} />
+      <RepaymentModal visible={repaymentFor !== null} loan={repaymentFor ?? undefined} onClose={() => setRepaymentFor(null)} onSave={(amount, key, audit) => repaymentFor ? repayLoan(amount, repaymentFor.id, key, audit) : Promise.reject(new Error('Choose a loan to repay.'))} />
       <LoanHistoryModal visible={historyVisible} loans={loans.filter(inScope)} finance={view} onClose={() => setHistoryVisible(false)} />
     </>
   );
@@ -680,10 +679,12 @@ function LoanApplicationModal({ visible, onClose, onSave, circles, finance, user
   );
 }
 
-function RepaymentModal({ visible, loan, onClose, onSave }: { visible: boolean; loan?: Loan; onClose: () => void; onSave: (amount: number, key: string) => Promise<void> }) {
+function RepaymentModal({ visible, loan, onClose, onSave }: { visible: boolean; loan?: Loan; onClose: () => void; onSave: (amount: number, key: string, audit: { method?: string; reference?: string }) => Promise<void> }) {
   const colors = useColors();
   const sheet = useSheet();
   const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState('');
+  const [reference, setReference] = useState('');
   const [requestKey, setRequestKey] = useState(newApplicationKey);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -696,6 +697,8 @@ function RepaymentModal({ visible, loan, onClose, onSave }: { visible: boolean; 
   React.useEffect(() => {
     if (visible && loan) {
       setAmount(String(Math.min(loan.monthlyRepayment, loan.balance)));
+      setMethod('');
+      setReference('');
       setRequestKey(newApplicationKey());
       setSaveError('');
       setSaving(false);
@@ -709,9 +712,11 @@ function RepaymentModal({ visible, loan, onClose, onSave }: { visible: boolean; 
     setSaving(true);
     setSaveError('');
     try {
-      await onSave(requested, requestKey);
+      await onSave(requested, requestKey, { method: method || undefined, reference: reference.trim() || undefined });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setAmount('');
+      setMethod('');
+      setReference('');
       onClose();
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'Could not record the repayment. Please retry.');
@@ -723,34 +728,67 @@ function RepaymentModal({ visible, loan, onClose, onSave }: { visible: boolean; 
     <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
-          <View style={sheet.handle} />
-          <Text style={[styles.modalEyebrow, { color: colors.primary }]}>REPAYMENT</Text>
-          <Text style={[styles.modalTitle, { color: colors.foreground }]}>Make a repayment</Text>
-          <Text testID="loan-repayment-plan" style={[styles.modalHint, { color: colors.mutedForeground }]}>
-            Your remaining balance is KES {balance.toLocaleString()}
-            {instalmentsLeft > 0 ? ` — about ${instalmentsLeft} more ${instalmentsLeft === 1 ? 'repayment' : 'repayments'} of KES ${monthly.toLocaleString()}.` : '.'}
-          </Text>
-          <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Amount</Text>
-          <View style={[styles.amountWrap, { backgroundColor: colors.background, borderColor: colors.border }]}>
-            <Text style={[styles.currency, { color: colors.primary }]}>KES</Text>
-            <TextInput testID="repayment-amount" value={amount} onChangeText={(value) => { setAmount(value); setRequestKey(newApplicationKey()); setSaveError(''); }} keyboardType="number-pad" placeholder={`${monthly}`} placeholderTextColor={colors.mutedForeground} accessibilityLabel="Repayment amount" style={[styles.amountInput, { color: colors.foreground }]} />
-          </View>
-          {finalRepayment !== monthly && balance > 0 ? (
-            <Text style={[styles.pendingNote, { color: colors.mutedForeground }]}>
-              Your last repayment is KES {Math.min(finalRepayment, balance).toLocaleString()}, not KES{' '}
-              {monthly.toLocaleString()} — the earlier rounded instalments already cover the rest of the agreed total.
+          <ScrollView keyboardShouldPersistTaps="handled" style={uiStyles.sheetScroll} showsVerticalScrollIndicator={false}>
+            <View style={sheet.handle} />
+            <Text style={[styles.modalEyebrow, { color: colors.primary }]}>REPAYMENT</Text>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Make a repayment</Text>
+            <Text testID="loan-repayment-plan" style={[styles.modalHint, { color: colors.mutedForeground }]}>
+              Your remaining balance is KES {balance.toLocaleString()}
+              {instalmentsLeft > 0 ? ` — about ${instalmentsLeft} more ${instalmentsLeft === 1 ? 'repayment' : 'repayments'} of KES ${monthly.toLocaleString()}.` : '.'}
             </Text>
-          ) : null}
-          <Text style={[styles.validation, { color: colors.destructive }]}>
-            {!Number.isInteger(requested) && amount.trim() ? 'Enter a whole amount in KES.' : requested > balance ? `The most you owe is KES ${balance.toLocaleString()}. Anything above that is not a debt the group is holding.` : ''}
-          </Text>
-          {saveError ? <Text testID="repayment-error" style={[styles.validation, { color: colors.destructive }]}>{saveError}</Text> : null}
-          <View style={styles.modalActions}>
-            <Pressable onPress={onClose} style={[styles.cancelButton, { borderColor: colors.border }]}>
-              <Text style={[styles.cancelText, { color: colors.inkSoft }]}>Cancel</Text>
-            </Pressable>
-            <View style={{ flex: 1 }}><PrimaryButton label={saving ? 'Saving repayment…' : 'Confirm repayment'} icon="check" onPress={submit} disabled={!valid} /></View>
-          </View>
+            <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Amount</Text>
+            <View style={[styles.amountWrap, { backgroundColor: colors.background, borderColor: colors.border }]}>
+              <Text style={[styles.currency, { color: colors.primary }]}>KES</Text>
+              <TextInput testID="repayment-amount" value={amount} onChangeText={(value) => { setAmount(value); setRequestKey(newApplicationKey()); setSaveError(''); }} keyboardType="number-pad" placeholder={`${monthly}`} placeholderTextColor={colors.mutedForeground} accessibilityLabel="Repayment amount" style={[styles.amountInput, { color: colors.foreground }]} />
+            </View>
+            {finalRepayment !== monthly && balance > 0 ? (
+              <Text style={[styles.pendingNote, { color: colors.mutedForeground }]}>
+                Your last repayment is KES {Math.min(finalRepayment, balance).toLocaleString()}, not KES{' '}
+                {monthly.toLocaleString()} — the earlier rounded instalments already cover the rest of the agreed total.
+              </Text>
+            ) : null}
+            <Text style={[styles.validation, { color: colors.destructive }]}>
+              {!Number.isInteger(requested) && amount.trim() ? 'Enter a whole amount in KES.' : requested > balance ? `The most you owe is KES ${balance.toLocaleString()}. Anything above that is not a debt the group is holding.` : ''}
+            </Text>
+            {/* What the group's treasurer would write on the slip. Optional: a repayment
+                is a repayment whether or not the payer describes how it arrived. */}
+            <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>How the money arrived (optional)</Text>
+            <View testID="repayment-methods" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {REPAYMENT_METHODS.map((option) => {
+                const active = method === option;
+                return (
+                  <Pressable
+                    key={option}
+                    onPress={() => setMethod(active ? '' : option)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`Payment method: ${option}`}
+                    style={({ pressed }) => [uiStyles.circleChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
+                  >
+                    <Text style={[uiStyles.circleChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{option}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={[styles.inputLabel, { color: colors.inkSoft }]}>Payment reference (optional)</Text>
+            <TextInput
+              testID="repayment-reference"
+              value={reference}
+              onChangeText={(value) => { setReference(value); setSaveError(''); }}
+              maxLength={60}
+              placeholder="e.g. a confirmation code or cheque number"
+              placeholderTextColor={colors.mutedForeground}
+              accessibilityLabel="Payment reference"
+              style={[styles.textInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]}
+            />
+            {saveError ? <Text testID="repayment-error" style={[styles.validation, { color: colors.destructive }]}>{saveError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable onPress={onClose} style={[styles.cancelButton, { borderColor: colors.border }]}>
+                <Text style={[styles.cancelText, { color: colors.inkSoft }]}>Cancel</Text>
+              </Pressable>
+              <View style={{ flex: 1 }}><PrimaryButton label={saving ? 'Saving repayment…' : 'Confirm repayment'} icon="check" onPress={submit} disabled={!valid} /></View>
+            </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>

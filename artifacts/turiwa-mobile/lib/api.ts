@@ -181,6 +181,12 @@ export type Contribution = {
   // Set when the entry is a loan's own money: the payout the fund made or an
   // instalment it received. It tells the ledger which loan the row belongs to.
   loanId: string | null;
+  // Whose hand recorded the entry, named. Null for rows written before the app asked.
+  recordedBy: string | null;
+  recordedByName: string | null;
+  // How the money arrived and the slip that says so, in the recorder's own words.
+  method: string | null;
+  reference: string | null;
 };
 
 /** The date to show for a ledger row: "Just now" inside the first minute, then the
@@ -557,10 +563,15 @@ export function applyForLoan(amount: number, purpose: string, circleId: string, 
   });
 }
 
-export function repayLoan(loanId: string, amount: number, idempotencyKey?: string) {
+export function repayLoan(loanId: string, amount: number, idempotencyKey?: string, audit?: { method?: string; reference?: string }) {
   return request<AppState>(`/loans/${loanId}/repay`, {
     method: 'POST',
-    body: JSON.stringify({ amount, ...(idempotencyKey ? { idempotencyKey } : {}) }),
+    body: JSON.stringify({
+      amount,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(audit?.method?.trim() ? { method: audit.method.trim() } : {}),
+      ...(audit?.reference?.trim() ? { reference: audit.reference.trim() } : {}),
+    }),
   });
 }
 

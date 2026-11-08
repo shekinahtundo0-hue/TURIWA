@@ -4,6 +4,7 @@ import {
   DatabaseNotConfigured,
   failedStatement,
   LIVE_UPDATES_REFUSED,
+  probeDatabase,
   publicFailureMessage,
 } from "./serverlessBoot";
 
@@ -12,6 +13,13 @@ export type Dispatch = (request: Request) => Promise<Response>;
 
 function json(statusCode: number, message: string): Response {
   return new Response(JSON.stringify({ message }), {
+    status: statusCode,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function body(statusCode: number, payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
     status: statusCode,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
@@ -35,15 +43,29 @@ export function createFetchHandler(mount: (app: Express) => Dispatch | Promise<D
   }
 
   return async function handler(request: Request, _context?: unknown): Promise<Response> {
+    const path = new URL(request.url).pathname;
     // A serverless invocation ends when the handler returns, so a stream that is meant to
     // stay open for hours cannot be served here. Refusing it immediately is what lets the
     // app switch to polling; holding the connection until the function times out would
     // instead stall every screen that opens it.
-    if (new URL(request.url).pathname === "/api/events") {
+    if (path === "/api/events") {
       return json(501, LIVE_UPDATES_REFUSED);
     }
 
+    // A cold isolate opens the database and brings the schema up to date before it can answer
+    // anything, and that is the wait a member's first request after a quiet period pays. A
+    // health check asking "is this deploy alive" must not be charged for it, so it is answered
+    // here. `/api/readyz` below is the one that still does the boot and puts a real query to
+    // the database — "alive" and "able to serve money" are different questions.
+    if (path === "/api/healthz") {
+      return body(200, { status: "ok" });
+    }
+
     try {
+      if (path === "/api/readyz") {
+        await probeDatabase();
+        return body(200, { status: "ready" });
+      }
       const dispatch = await warmUp();
       return await dispatch(request);
     } catch (err) {

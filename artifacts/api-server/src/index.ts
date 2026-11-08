@@ -28,6 +28,14 @@ async function main() {
     process.exit(0);
   }
 
+  // The same reconciliation as a command, for a database this process is only visiting: a
+  // serverless host cannot run it while answering a member's request, so it runs here instead.
+  // It is idempotent — the entries it writes are keyed to the loan's own id.
+  if (process.argv.includes("--reconcile-loan-ledger")) {
+    logger.info(await linkExistingLoans(), "Loans linked into the group ledger");
+    process.exit(0);
+  }
+
   // Money a loan moved is ledger history, so the group's cash figure is the sum of
   // its entries. Runs once per loan: the entries are keyed to the loan's own id.
   const { linked, ungrouped } = await linkExistingLoans();

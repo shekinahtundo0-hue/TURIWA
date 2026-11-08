@@ -614,7 +614,7 @@ export function TransactionDetailModal({
             {/* Full Record Metadata */}
             <View style={[styles.detailGrid, { backgroundColor: colors.input, borderColor: colors.border }]}>
               <View style={styles.txDetailRow}>
-                <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Reference</Text>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Ledger entry ID</Text>
                 <Text style={[styles.detailValue, styles.detailMono, { color: colors.foreground }]} numberOfLines={1} selectable>
                   {transaction.id}
                 </Text>
@@ -630,6 +630,33 @@ export function TransactionDetailModal({
                   <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Member</Text>
                   <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={1}>
                     {transaction.member}
+                  </Text>
+                </View>
+              ) : null}
+              {/* The hand that typed the entry and the slip that names the money. Both are
+                  absent on rows written before the app asked for them — nothing is
+                  inferred, and an old entry says nothing rather than something invented. */}
+              {transaction.recordedByName || transaction.recordedBy ? (
+                <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Recorded by</Text>
+                  <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={1}>
+                    {transaction.recordedByName ?? 'A member of this circle'}
+                  </Text>
+                </View>
+              ) : null}
+              {transaction.method ? (
+                <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Payment method</Text>
+                  <Text style={[styles.detailValue, { color: colors.foreground }]} numberOfLines={1}>
+                    {transaction.method}
+                  </Text>
+                </View>
+              ) : null}
+              {transaction.reference ? (
+                <View style={[styles.txDetailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Payment reference</Text>
+                  <Text style={[styles.detailValue, styles.detailMono, { color: colors.foreground }]} numberOfLines={1} selectable>
+                    {transaction.reference}
                   </Text>
                 </View>
               ) : null}

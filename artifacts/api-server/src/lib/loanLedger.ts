@@ -5,6 +5,21 @@ import { logger } from "./logger";
 
 type LoanDbExecutor = Pick<ReturnType<typeof getDb>, "insert" | "select">;
 
+/** The three things a ledger row should be able to answer about itself: whose hand
+ *  typed it, how the money arrived, and the slip that names it. All optional — a
+ *  borrower who says nothing gets nothing stored, and the app never fills the gap with
+ *  a plausible-sounding default. */
+export type LedgerAudit = {
+  recordedBy?: string | null;
+  method?: string | null;
+  reference?: string | null;
+};
+
+const text = (value: string | null | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
 // A loan moves the group's cash: the fund hands the principal out, and the member
 // pays it back in instalments. Both movements are ledger entries, so the balance on
 // screen is the sum of the ledger and nothing else — a group cannot show money it has
@@ -16,8 +31,17 @@ type LoanDbExecutor = Pick<ReturnType<typeof getDb>, "insert" | "select">;
 // makes the repair run exactly once no matter how many times the server starts.
 
 /** What the ledger writes when a loan's money moves. Pending requests are excluded by
- *  the caller: nothing has left the fund until the group says yes. */
-export async function recordLoanDisbursement(loan: Loan, date: string, executor: LoanDbExecutor = getDb()): Promise<boolean> {
+ *  the caller: nothing has left the fund until the group says yes.
+ *
+ *  `audit` is who recorded the movement and how the cash arrived. It is stored on the
+ *  entry, never derived: a payout retried under the same loan id keeps the first
+ *  recorder, because the second write is the retry, not a second decision. */
+export async function recordLoanDisbursement(
+  loan: Loan,
+  date: string,
+  executor: LoanDbExecutor = getDb(),
+  audit: LedgerAudit = {},
+): Promise<boolean> {
   if (!loan.circleId) return false;
   const rows = await executor
     .insert(contributionsTable)
@@ -32,6 +56,9 @@ export async function recordLoanDisbursement(loan: Loan, date: string, executor:
       type: "LoanDisbursement",
       member: await memberName(loan.userId, executor),
       loanId: loan.id,
+      recordedBy: audit.recordedBy ?? null,
+      method: text(audit.method),
+      reference: text(audit.reference),
     })
     .onConflictDoNothing()
     .returning({ id: contributionsTable.id });
@@ -40,7 +67,13 @@ export async function recordLoanDisbursement(loan: Loan, date: string, executor:
 
 /** One repayment, in the moment it happens, so the fund's cash and the loan's
  *  remaining balance always move by the same amount. */
-export async function recordLoanRepayment(loan: Loan, amount: number, executor: LoanDbExecutor = getDb(), entryId = newId("c")): Promise<void> {
+export async function recordLoanRepayment(
+  loan: Loan,
+  amount: number,
+  executor: LoanDbExecutor = getDb(),
+  entryId = newId("c"),
+  audit: LedgerAudit = {},
+): Promise<void> {
   if (!loan.circleId || amount <= 0) return;
   await executor.insert(contributionsTable).values({
     id: entryId,
@@ -53,6 +86,9 @@ export async function recordLoanRepayment(loan: Loan, amount: number, executor: 
     type: "Repayment",
     member: await memberName(loan.userId, executor),
     loanId: loan.id,
+    recordedBy: audit.recordedBy ?? null,
+    method: text(audit.method),
+    reference: text(audit.reference),
   });
 }
 

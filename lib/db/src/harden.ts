@@ -11,6 +11,30 @@ const KEYHOLDER_ROLES = ["anon", "authenticated"];
 
 const quote = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
 
+/**
+ * Does this access control list still hand a privilege to somebody holding the app's public key?
+ *
+ * An entry prints as `grantee=privileges/grantor`, and the grantee is blank for PUBLIC — the
+ * pseudo-role every role in the database holds. An entry with no privileges after the `=` is
+ * what a revoke leaves behind, so it is not an opening.
+ *
+ * A missing list means the object runs on the server's default privileges, and on Supabase those
+ * are exactly what this file exists to distrust. Unknown is treated as open.
+ */
+function stillExposed(acl: string | null, keyholders: readonly string[]): boolean {
+  if (acl === null) return true;
+  return acl
+    .replace(/^\{/, "")
+    .replace(/\}$/, "")
+    .split(",")
+    .some((entry) => {
+      const [grantee, granted = ""] = entry.split("=");
+      const privileges = granted.split("/")[0];
+      if (!privileges) return false;
+      return grantee === "" || keyholders.includes(grantee);
+    });
+}
+
 export async function hardenHostedSchema(
   pool: pg.Pool,
   tables: readonly string[],
@@ -26,18 +50,39 @@ export async function hardenHostedSchema(
 
   const statements: string[] = [];
 
-  // Without USAGE on the schema, PostgREST cannot see any table in it, including ones created
-  // after this run — so this is the durable half of the closure and the per-table revokes below
-  // are the belt.
-  statements.push(
-    ...revokeTargets.map((target) => `revoke all on schema public from ${target}`),
+  // Closing the schema is worth more than closing a table, because it also covers tables created
+  // after this run — so it is checked first, and the per-table revokes below are the belt.
+  const { rows: namespaces } = await pool.query(
+    "select array_to_string(nspacl, ',') as acl from pg_namespace where nspname = 'public'",
   );
-
-  for (const table of tables) {
+  if (stillExposed(namespaces[0]?.acl ?? null, presentRoles)) {
     statements.push(
-      ...revokeTargets.map((target) => `revoke all on table public.${quote(table)} from ${target}`),
-      `alter table public.${quote(table)} enable row level security`,
+      ...revokeTargets.map((target) => `revoke all on schema public from ${target}`),
     );
+  }
+
+  // What the catalogue already says is closed does not need to be revoked again. Before this, a
+  // boot sent a revoke per table per role plus an RLS statement per table, all of them no-ops on
+  // a database that was closed months ago, and it sent them inside the first request a cold
+  // isolate served.
+  const { rows: objects } = await pool.query(
+    `select c.relname as table, array_to_string(c.relacl, ',') as acl, c.relrowsecurity as rls
+       from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind in ('r', 'p') and c.relname = any($1)`,
+    [tables],
+  );
+  const present = new Map(objects.map((row) => [row.table as string, row]));
+  for (const table of tables) {
+    const row = present.get(table);
+    // A table the bootstrap has not created yet has no privileges to take back, and revoking from
+    // it would fail the whole run.
+    if (!row) continue;
+    if (stillExposed(row.acl ?? null, presentRoles)) {
+      statements.push(`revoke all on table public.${quote(table)} from ${revokeTargets.join(", ")}`);
+    }
+    if (row.rls !== true) {
+      statements.push(`alter table public.${quote(table)} enable row level security`);
+    }
   }
 
   // Realtime streams row changes to whoever holds the same bundle key, which is the same door
@@ -55,6 +100,11 @@ export async function hardenHostedSchema(
         .join(", ")}`,
     );
   }
+
+  // Nothing is exposed, so nothing changes and the boot pays four reads instead of forty
+  // statements. The check is the catalogue itself rather than a note of what was done, so a
+  // privilege handed out from the Supabase dashboard is closed again by the next boot.
+  if (statements.length === 0) return [];
 
   const client = await pool.connect();
   try {
