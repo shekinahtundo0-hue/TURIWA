@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
+import { useResponsive } from '@/hooks/useResponsive';
 import { useTheme } from '@/context/ThemeContext';
 import { type Finance, Loan, canManageCircle, useTuriwa } from '@/context/TuriwaContext';
 import type { Circle } from '@/lib/api';
@@ -24,8 +25,9 @@ const REPAYMENT_METHODS = ['Cash', 'Mobile money', 'Bank transfer', 'Cheque'];
 export default function LoansScreen() {
   const colors = useColors();
   const { isDark } = useTheme();
+  const layout = useResponsive();
   const { circleId: requestedCircleId, loanId: requestedLoanId } = useLocalSearchParams<{ circleId?: string; loanId?: string }>();
-  const { loans, circles, finance, activeCircle, activeFinance, applyForLoan, repayLoan, approveLoan, rejectLoan, user, hydrated } = useTuriwa();
+  const { loans, circles, finance, activeCircle, activeFinance, applyForLoan, repayLoan, approveLoan, rejectLoan, setActiveCircle, user, hydrated } = useTuriwa();
   const [applicationVisible, setApplicationVisible] = useState(false);
   // Credit is decided circle by circle, so the screen reads the circle the person is in.
   const scoped = activeCircle;
@@ -59,11 +61,31 @@ export default function LoansScreen() {
   );
   const runningLoans = loans.filter((loan) => loan.status === 'Active' && inScope(loan));
   const lateLoans = runningLoans.filter((loan) => isOverdue(loan));
+  // Only the borrower's own hand can pay a loan back — the API refuses anybody else —
+  // so the circle's book is split here into what this account owes and what the rest of
+  // the group owes. One list is actionable, the other is a record to read.
+  const mine = (loan: Loan) => loan.applicantId === (user?.id ?? '');
+  const myRunningLoans = runningLoans.filter(mine);
+  const myLateLoans = myRunningLoans.filter((loan) => isOverdue(loan));
+  const groupRunningLoans = runningLoans.filter((loan) => !mine(loan));
+  // The hero figure has always been the reader's own debt, and the harness that proves
+  // it runs as a borrower standing in a circle that also holds other people's loans.
+  // Showing the whole book (the API hands it to members now) must not quietly turn
+  // "you owe" into "the group owes", so the two totals stay apart: this one is headed
+  // with the reader's name, the other with the circle's.
+  const myOutstanding = myRunningLoans.reduce((sum, loan) => sum + loan.balance, 0);
+  const bookOutstanding = groupRunningLoans.reduce((sum, loan) => sum + loan.balance, 0);
   // A request the member raised but cannot decide themselves still belongs on their
   // screen — otherwise it looks lost rather than waiting.
   const waitingOnOthers = loans.filter(
     (loan) => loan.status === 'Pending' && inScope(loan) && !pendingApprovals.some((item) => item.id === loan.id),
   );
+  // The screen reads one circle at a time, so an empty circle has to say where the
+  // group money actually is instead of implying nothing was ever lent.
+  const loansElsewhere = circles
+    .filter((circle) => circle.id !== scoped?.id)
+    .map((circle) => ({ circle, count: loans.filter((loan) => loan.status === 'Active' && loan.circleId === circle.id).length }))
+    .filter((entry) => entry.count > 0);
   const totalBorrowed = view.totalBorrowed;
   // What the fund could hand over today. The API refuses a loan above its own cash,
   // so this is the rule and the number on screen are the same thing.
@@ -180,9 +202,13 @@ export default function LoansScreen() {
           </View>
           <View style={styles.creditFooter}>
             <View>
-              <Text style={[styles.creditLabel, { color: colors.heroMuted }]}>{scoped ? 'Borrowers still owe this circle' : 'Borrowers still owe the fund'}</Text>
+              <Text style={[styles.creditLabel, { color: colors.heroMuted }]}>{scoped ? 'You still owe this circle' : 'You still owe the fund'}</Text>
               <Text testID="loan-outstanding" style={[styles.creditMeta, { color: colors.heroForeground }]}>
-                {view.outstanding > 0 ? `${kesLabel(view.outstanding)} across ${runningLoans.length} running ${runningLoans.length === 1 ? 'loan' : 'loans'}` : 'Nothing borrowed yet'}
+                {myOutstanding > 0
+                  ? `${kesLabel(myOutstanding)} across ${myRunningLoans.length} running ${myRunningLoans.length === 1 ? 'loan' : 'loans'}`
+                  : bookOutstanding > 0
+                    ? 'Nothing of yours is out right now'
+                    : 'Nothing borrowed yet'}
               </Text>
             </View>
             <View style={[styles.creditMark, { backgroundColor: colors.heroChip, borderColor: colors.heroBorder }]}>
@@ -195,7 +221,7 @@ export default function LoansScreen() {
         </LinearGradient>
         <View style={styles.loanActions}>
           <View style={{ flex: 1 }}><PrimaryButton label="Request a loan" icon="plus" onPress={() => setApplicationVisible(true)} /></View>
-          <Pressable onPress={() => setHistoryVisible(true)} style={({ pressed }) => [styles.historyButton, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}><Feather name="clock" size={17} color={colors.primary} /><Text style={[styles.historyText, { color: colors.primary }]}>History</Text></Pressable>
+          <Pressable testID="loan-history-open" accessibilityRole="button" accessibilityLabel="Loan history" onPress={() => setHistoryVisible(true)} style={({ pressed }) => [styles.historyButton, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}><Feather name="clock" size={17} color={colors.primary} /><Text style={[styles.historyText, { color: colors.primary }]}>History</Text></Pressable>
         </View>
 
         {/* Admin Loan Approvals Hub (Visible when user is Admin or Co-Admin) */}
@@ -303,44 +329,83 @@ export default function LoansScreen() {
         ) : null}
 
         <SectionHeading
-          title={runningLoans.length === 1 ? 'Your running loan' : `Your running loans (${runningLoans.length})`}
-          action={lateLoans.length > 0 ? `${lateLoans.length} past due` : undefined}
+          title={myRunningLoans.length === 1 ? 'Your running loan' : `Your running loans (${myRunningLoans.length})`}
+          action={myLateLoans.length > 0 ? `${myLateLoans.length} past due` : undefined}
         />
-        {runningLoans.length > 0 ? (
-          <View style={styles.loanStack}>
-            {runningLoans.map((loan) => (
-              <LoanCard
-                key={loan.id}
-                loan={loan}
-                circleName={circles.find((circle) => circle.id === loan.circleId)?.name}
-                returned={finance.returnedFor(loan.id)}
-                onRepay={() => setRepaymentFor(loan)}
-              />
+        {myRunningLoans.length > 0 ? (
+          <View style={[styles.loanStack, !layout.isPhone && styles.loanGrid]}>
+            {myRunningLoans.map((loan) => (
+              <View key={loan.id} style={{ width: layout.cardWidth }}>
+                <LoanCard
+                  loan={loan}
+                  circleName={circles.find((circle) => circle.id === loan.circleId)?.name}
+                  returned={finance.returnedFor(loan.id)}
+                  onRepay={() => setRepaymentFor(loan)}
+                />
+              </View>
             ))}
           </View>
         ) : (
           <View style={[styles.emptyLoan, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={[styles.emptyIcon, { backgroundColor: colors.successSoft }]}><MaterialCommunityIcons name="hand-coin-outline" size={24} color={colors.primary} /></View>
             <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No loan is running</Text>
-            <Text style={[styles.emptyCopy, { color: colors.mutedForeground }]}>
-              A loan starts when the group hands over its savings, so nothing is running until a request is
-              approved.
+            <Text testID="loan-empty-reason" style={[styles.emptyCopy, { color: colors.mutedForeground }]}>
+              {groupRunningLoans.length > 0
+                ? `You have no loan of your own out. The ${groupRunningLoans.length} running ${groupRunningLoans.length === 1 ? 'loan' : 'loans'} below were handed to other members of ${scoped?.name ?? 'your circles'}.`
+                : loansElsewhere.length > 0
+                  ? `Nothing is running in ${scoped?.name ?? 'this circle'}. ${loansElsewhere.map((entry) => `${entry.circle.name} has ${entry.count}`).join(', ')} — and those are the group's own records, not lost ones.`
+                  : 'A loan starts when the group hands over its savings, so nothing is running until a request is approved.'}
             </Text>
+            {loansElsewhere.length > 0 && groupRunningLoans.length === 0 ? (
+              <Pressable
+                testID={`loan-switch-${loansElsewhere[0].circle.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={`Switch to ${loansElsewhere[0].circle.name}, which has ${loansElsewhere[0].count} running loan${loansElsewhere[0].count === 1 ? '' : 's'}`}
+                onPress={() => { void setActiveCircle(loansElsewhere[0].circle.id); }}
+                style={({ pressed }) => [styles.reviewOpenButton, { borderColor: colors.primary, opacity: pressed ? 0.7 : 1 }]}
+              >
+                <Feather name="repeat" size={14} color={colors.primary} />
+                <Text style={[styles.reviewOpenText, { color: colors.primary }]}>Switch to {loansElsewhere[0].circle.name}</Text>
+              </Pressable>
+            ) : null}
             <PrimaryButton label="Request a loan" icon="arrow-right" onPress={() => setApplicationVisible(true)} compact />
           </View>
         )}
 
+        {/* The rest of the circle's book, read-only: the money left the fund and the
+            ledger names who holds it, but only that borrower can pay it back. */}
+        {groupRunningLoans.length > 0 ? (
+          <>
+            <SectionHeading
+              title={`${scoped ? 'This circle’s' : 'Your circles’'} other loans (${groupRunningLoans.length})`}
+              action={lateLoans.filter((loan) => !mine(loan)).length > 0 ? `${lateLoans.filter((loan) => !mine(loan)).length} past due` : undefined}
+            />
+            <View style={[styles.loanStack, !layout.isPhone && styles.loanGrid]}>
+              {groupRunningLoans.map((loan) => (
+                <View key={loan.id} style={{ width: layout.cardWidth }}>
+                  <LoanCard
+                    loan={loan}
+                    circleName={circles.find((circle) => circle.id === loan.circleId)?.name}
+                    returned={finance.returnedFor(loan.id)}
+                  />
+                </View>
+              ))}
+            </View>
+          </>
+        ) : null}
+
         {waitingOnOthers.length > 0 ? (
           <>
             <SectionHeading title={`Waiting for a decision (${waitingOnOthers.length})`} />
-            <View style={styles.loanStack}>
+            <View style={[styles.loanStack, !layout.isPhone && styles.loanGrid]}>
               {waitingOnOthers.map((loan) => (
-                <LoanCard
-                  key={loan.id}
-                  loan={loan}
-                  circleName={circles.find((circle) => circle.id === loan.circleId)?.name}
-                  returned={finance.returnedFor(loan.id)}
-                />
+                <View key={loan.id} style={{ width: layout.cardWidth }}>
+                  <LoanCard
+                    loan={loan}
+                    circleName={circles.find((circle) => circle.id === loan.circleId)?.name}
+                    returned={finance.returnedFor(loan.id)}
+                  />
+                </View>
               ))}
             </View>
           </>
@@ -514,9 +579,10 @@ function LoanCard({ loan, circleName, returned, onRepay }: { loan: Loan; circleN
       {onRepay ? (
         <PrimaryButton label="Make a repayment" icon="arrow-up-right" onPress={onRepay} compact />
       ) : (
-        <Text style={[styles.pendingNote, { color: colors.mutedForeground }]}>
-          An admin of {circleName ?? 'the group'} approves this request. Nothing has left the fund yet, so the money
-          is still everyone's savings.
+        <Text testID={`loan-holder-${loan.id}`} style={[styles.pendingNote, { color: colors.mutedForeground }]}>
+          {pending
+            ? `An admin of ${circleName ?? 'the group'} approves this request. Nothing has left the fund yet, so the money is still everyone's savings.`
+            : `${loan.applicantName} holds this money — KES ${loan.balance.toLocaleString()} still owed to ${circleName ?? 'the group'}. Only they can record a payment against their own loan.`}
         </Text>
       )}
     </View>
@@ -809,9 +875,10 @@ const styles = StyleSheet.create({
   creditMark: { flexDirection: 'row', gap: 5, alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
   creditMarkText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   loanActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  historyButton: { flex: 0.42, borderWidth: 1, borderRadius: 14, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' },
+  historyButton: { flex: 0.42, minWidth: 0, minHeight: 44, borderWidth: 1, borderRadius: 14, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' },
   historyText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   loanStack: { gap: 10 },
+  loanGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   loanCard: { borderWidth: 1, borderRadius: 20, padding: 16 },
   loanCardTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   loanIcon: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
@@ -854,7 +921,7 @@ const styles = StyleSheet.create({
   inputLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 12, marginBottom: 8, marginTop: 10 },
   amountWrap: { borderWidth: 1, height: 55, borderRadius: 14, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14 },
   currency: { fontFamily: 'Inter_700Bold', fontSize: 13, marginRight: 12 },
-  amountInput: { flex: 1, fontFamily: 'Inter_700Bold', fontSize: 21 },
+  amountInput: { flex: 1, minWidth: 0, alignSelf: 'stretch', fontFamily: 'Inter_700Bold', fontSize: 21 },
   textInput: { borderWidth: 1, height: 52, borderRadius: 14, paddingHorizontal: 14, fontFamily: 'Inter_400Regular', fontSize: 14 },
   validation: { fontFamily: 'Inter_400Regular', fontSize: 11, minHeight: 16, marginTop: 6 },
   feePreview: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 11, marginTop: 14 },

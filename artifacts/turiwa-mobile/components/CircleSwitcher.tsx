@@ -318,7 +318,7 @@ const styles = StyleSheet.create({
   // minWidth 0 is what lets a long circle name truncate instead of widening the header past 320px.
   triggerCopy: { flex: 1, minWidth: 0 },
   triggerName: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
-  triggerRole: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 1 },
+  triggerRole: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 1 },
   // Tabs paint their scroll content after the header, so the panel needs elevation as well
   // as zIndex to stay above it on native.
   panel: { position: 'absolute', top: 52, right: 0, width: 340, maxHeight: 460, zIndex: 60, elevation: 8, borderWidth: 1, borderRadius: 20, padding: 16 },
@@ -326,7 +326,7 @@ const styles = StyleSheet.create({
   sheetScroll: { flexGrow: 0, flexShrink: 1 },
   sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
   sheetHeadCopy: { flex: 1, minWidth: 0 },
-  sheetEyebrow: { fontFamily: 'Inter_700Bold', fontSize: 10.5, letterSpacing: 1.6, marginBottom: 4 },
+  sheetEyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.6, marginBottom: 4 },
   sheetTitle: { fontFamily: 'Inter_700Bold', fontSize: 16.5, letterSpacing: -0.3 },
   closeButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   list: { gap: 8 },
@@ -337,9 +337,9 @@ const styles = StyleSheet.create({
   itemName: { fontFamily: 'Inter_600SemiBold', fontSize: 13.5 },
   itemMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' },
   roleText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
-  memberCount: { fontFamily: 'Inter_400Regular', fontSize: 10.5 },
-  unread: { minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' },
-  unreadText: { fontFamily: 'Inter_700Bold', fontSize: 10 },
+  memberCount: { fontFamily: 'Inter_400Regular', fontSize: 11 },
+  unread: { minWidth: 20, height: 20, borderRadius: 10, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' },
+  unreadText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
   search: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, minHeight: 44, fontFamily: 'Inter_500Medium', fontSize: 13, marginBottom: 10 },
   noMatch: { fontFamily: 'Inter_500Medium', fontSize: 12.5, paddingVertical: 14, textAlign: 'center' },
   refused: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, padding: 10, marginTop: 10 },

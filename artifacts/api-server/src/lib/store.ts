@@ -271,12 +271,6 @@ export async function getState(userId: string): Promise<AppState> {
     db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1),
   ]);
   const circleIds = allCircles.map((circle) => circle.id);
-  const administeredCircleIds = allCircles
-    .filter((circle) => circle.createdBy === userId || circle.membersList?.some(
-      (member) => member.id === userId && (member.status ?? "active") === "active" &&
-        (member.role === "admin" || member.role === "co-admin"),
-    ))
-    .map((circle) => circle.id);
   const [contributions, loans] = await Promise.all([
     circleIds.length === 0
       ? Promise.resolve([])
@@ -285,12 +279,18 @@ export async function getState(userId: string): Promise<AppState> {
           .from(contributionsTable)
           .where(inArray(contributionsTable.circleId, circleIds))
           .orderBy(desc(contributionsTable.createdAt)),
-    administeredCircleIds.length === 0
-      ? db.select().from(loansTable).where(eq(loansTable.userId, userId))
-      : db
-          .select()
-          .from(loansTable)
-          .where(or(eq(loansTable.userId, userId), inArray(loansTable.circleId, administeredCircleIds))),
+    // A group's loan book travels with its ledger: the disbursement and repayment rows
+    // above already name these loans and their amounts, so withholding the loan records
+    // from a member hid nothing — it only left their screen claiming nothing was borrowed
+    // while the same circle's cash figure sat on top of it.
+    db
+      .select()
+      .from(loansTable)
+      .where(
+        circleIds.length === 0
+          ? eq(loansTable.userId, userId)
+          : or(eq(loansTable.userId, userId), inArray(loansTable.circleId, circleIds)),
+      ),
   ]);
   const relatedUserIds = [...new Set([
     ...loans.map((loan) => loan.userId).filter((id): id is string => Boolean(id)),

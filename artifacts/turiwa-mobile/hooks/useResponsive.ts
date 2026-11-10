@@ -36,6 +36,8 @@ export interface Layout {
   railWidth: number;
   gutter: number;
   contentMaxWidth: number;
+  /** A phone narrow enough that a three-way row of controls drops under the touch minimum. */
+  cramped: boolean;
   /** Fractional width for the big cards (circles, loans) in a wrapped row. */
   cardWidth: DimensionValue;
   /** Fractional width for the small service tiles on Home. */
@@ -89,6 +91,7 @@ export function useResponsive(): Layout {
       gutter: desktop ? 32 : mode === 'tablet' ? 28 : 20,
       // A 1920px window should not show a phone column with two empty margins.
       contentMaxWidth: desktop ? (width >= WIDE_MIN_WIDTH ? 1080 : 900) : mode === 'tablet' ? 800 : 600,
+      cramped,
       cardWidth: cellWidth(columns),
       tileWidth: cellWidth(tileColumns),
       type,

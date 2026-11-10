@@ -295,10 +295,12 @@ export default function ActivityScreen() {
               onPress={clearFilters}
               accessibilityRole="button"
               accessibilityLabel="Reset all active filters"
-              style={({ pressed }) => [styles.resetBadge, { backgroundColor: colors.muted, opacity: pressed ? 0.7 : 1 }]}
+              style={({ pressed }) => [styles.resetBadgeHit, { opacity: pressed ? 0.7 : 1 }]}
             >
-              <Feather name="rotate-ccw" size={11} color={colors.primary} />
-              <Text style={[styles.resetBadgeText, { color: colors.primary }]}>Reset</Text>
+              <View style={[styles.resetBadge, { backgroundColor: colors.muted }]}>
+                <Feather name="rotate-ccw" size={11} color={colors.primary} />
+                <Text style={[styles.resetBadgeText, { color: colors.primary }]}>Reset</Text>
+              </View>
             </Pressable>
           ) : null}
         </View>
@@ -451,7 +453,7 @@ export default function ActivityScreen() {
           </View>
 
           {/* Direction & Status Filters */}
-          <View style={styles.dualFilterRow}>
+          <View style={[styles.dualFilterRow, layout.cramped && styles.dualFilterStack]}>
             {/* Direction */}
             <View style={{ flex: 1 }}>
               <Text style={[styles.filterLabel, { color: colors.inkSoft }]}>DIRECTION</Text>
@@ -856,6 +858,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     letterSpacing: 0.2,
   },
+  resetBadgeHit: {
+    minHeight: 44,
+    paddingHorizontal: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   resetBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -899,7 +907,7 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 10.5,
+    fontSize: 11,
     letterSpacing: 1.1,
     flexShrink: 1,
   },
@@ -919,7 +927,7 @@ const styles = StyleSheet.create({
   },
   summaryCaption: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 10.5,
+    fontSize: 11,
     marginTop: 5,
     opacity: 0.88,
   },
@@ -957,9 +965,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
   },
+  // Three segments inside half of a 360px phone leave each choice under the 44px touch
+  // minimum, so a narrow phone gives them the full width one group at a time.
+  dualFilterStack: {
+    flexDirection: 'column',
+  },
   filterLabel: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 10.5,
+    fontSize: 11,
     letterSpacing: 1.3,
   },
   filterScroll: {
@@ -1010,9 +1023,10 @@ const styles = StyleSheet.create({
   resetLink: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
+    minHeight: 44,
     paddingHorizontal: 6,
-    paddingVertical: 2,
   },
   resetLinkText: {
     fontFamily: 'Inter_600SemiBold',

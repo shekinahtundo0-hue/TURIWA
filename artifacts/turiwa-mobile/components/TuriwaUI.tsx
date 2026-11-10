@@ -1416,6 +1416,9 @@ export function CircleDetailModal({
                 </Text>
                 {isCircleAdmin && onAddMember ? (
                   <Pressable
+                    testID="add-member-open"
+                    accessibilityRole="button"
+                    accessibilityLabel="Add a member to this group"
                     onPress={() => setAddMemberVisible(true)}
                     style={({ pressed }) => [
                       styles.addMemberBtn,
@@ -2152,7 +2155,7 @@ export const styles = StyleSheet.create({
   inputLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 12, marginBottom: 8, marginTop: 10 },
   inputWrap: { borderWidth: 1, borderRadius: 14, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, height: 56 },
   currencyPrefix: { fontFamily: 'Inter_700Bold', fontSize: 14, marginRight: 12 },
-  amountInput: { flex: 1, fontFamily: 'Inter_700Bold', fontSize: 22 },
+  amountInput: { flex: 1, minWidth: 0, alignSelf: 'stretch', fontFamily: 'Inter_700Bold', fontSize: 22 },
   textInput: { borderWidth: 1, borderRadius: 14, height: 52, paddingHorizontal: 14, fontFamily: 'Inter_400Regular', fontSize: 14 },
   saveError: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 15, marginTop: 8 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 23, alignItems: 'center' },
@@ -2170,8 +2173,10 @@ export const styles = StyleSheet.create({
   amountChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   amountChip: { borderWidth: 1, borderRadius: 11, minWidth: 62, minHeight: 44, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 12 },
   amountChipText: { fontFamily: 'Inter_700Bold', fontSize: 13 },
-  circleChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center' },
-  circleChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  // A circle name can be longer than the phone viewport; without shrinking the
+  // chip would run past the right edge instead of wrapping its text.
+  circleChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center', alignItems: 'flex-start', flexShrink: 1, minWidth: 0, maxWidth: '100%' },
+  circleChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12, flexShrink: 1, minWidth: 0 },
   ledgerHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   ledgerClose: { width: 44, height: 44, borderRadius: 15, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   // A recessed track with the chosen kind lifted onto the card surface, so the
@@ -2224,13 +2229,13 @@ export const styles = StyleSheet.create({
   fineHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   fineHeadMain: { flexDirection: 'row', alignItems: 'center', gap: 7, flex: 1 },
   fineTitle: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
-  fineEditBtn: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 },
+  fineEditBtn: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 12, minHeight: 44, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   fineEditText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   fineRule: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 },
   fineEditor: { gap: 8, marginTop: 2 },
   fineInputWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, height: 48, gap: 10 },
   fineCurrency: { fontFamily: 'Inter_700Bold', fontSize: 12 },
-  fineInput: { flex: 1, fontFamily: 'Inter_700Bold', fontSize: 18 },
+  fineInput: { flex: 1, minWidth: 0, alignSelf: 'stretch', fontFamily: 'Inter_700Bold', fontSize: 18 },
   fineHint: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16 },
   fineSave: { minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   fineSaveText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
@@ -2244,7 +2249,7 @@ export const styles = StyleSheet.create({
   fineDoneText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
   // Governance & Members styling
   governanceCard: { borderWidth: 1, borderRadius: 18, padding: 16, marginTop: 16 },
-  governanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  governanceHeader: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 },
   governanceTitle: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   capacityPill: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
   capacityPillText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 0.6 },
@@ -2268,7 +2273,16 @@ export const styles = StyleSheet.create({
   loanDecisionActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   approveButtonText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   membersSection: { marginTop: 22 },
-  addMemberBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  addMemberBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    minHeight: 44,
+  },
   addMemberBtnText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   memberRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1 },
   memberAvatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
@@ -2279,7 +2293,7 @@ export const styles = StyleSheet.create({
   roleBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 0.8 },
   memberMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4 },
   adminActionWrap: { alignItems: 'flex-end', justifyContent: 'center' },
-  coAdminToggleBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
+  coAdminToggleBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   coAdminToggleText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   coAdminLimitNotice: { fontFamily: 'Inter_400Regular', fontSize: 11 },
   membersEmpty: { fontFamily: 'Inter_400Regular', fontSize: 12.5, lineHeight: 19, paddingHorizontal: 2, paddingVertical: 14 },
@@ -2294,7 +2308,7 @@ export const styles = StyleSheet.create({
   skeletonLine: { height: 11, borderRadius: 6 },
   summaryIconBox: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   loanTag: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1, borderWidth: 1 },
-  loanTagText: { fontFamily: 'Inter_600SemiBold', fontSize: 10, letterSpacing: 0.3 },
+  loanTagText: { fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.3 },
   detailHeroCard: { borderWidth: 1, borderRadius: 18, padding: 18, alignItems: 'center', marginTop: 12 },
   detailHeroAmount: { fontFamily: 'Inter_700Bold', fontSize: 28, letterSpacing: -0.8, marginTop: 4 },
   detailDirectionPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8 },

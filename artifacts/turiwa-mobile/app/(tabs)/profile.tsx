@@ -1292,7 +1292,9 @@ function NotificationPreferencesSheet({ visible, onClose }: { visible: boolean; 
               Messages about your own standing — a removal, a role change, a fine — always arrive.
             </Text>
             <Text style={[uiStyles.inputLabel, { color: colors.inkSoft }]}>APPLIES TO</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8, paddingBottom: 4 }}>
+            {/* Wrapping instead of a horizontal scroller: with a dozen circles the choice
+              you have not scrolled to is the one you never see. */}
+            <View style={styles.notifyScopeRow}>
               {[{ id: '', name: 'All circles' }, ...circles.map((circle) => ({ id: circle.id, name: circle.name }))].map((item) => {
                 const active = item.id === scope;
                 return (
@@ -1308,25 +1310,36 @@ function NotificationPreferencesSheet({ visible, onClose }: { visible: boolean; 
                   </Pressable>
                 );
               })}
-            </ScrollView>
+            </View>
             <View style={{ marginTop: 12 }}>
               {options.map((option) => (
-                <View key={option.key} style={[styles.notifyRow, { borderBottomColor: colors.border }]}>
+                <Pressable
+                  key={option.key}
+                  testID={`notify-row-${option.key}`}
+                  accessibilityRole="switch"
+                  accessibilityLabel={`${option.label} notifications for ${scopeName}`}
+                  accessibilityState={{ checked: values[option.key], disabled: busy === option.key }}
+                  disabled={busy === option.key}
+                  onPress={() => void toggle(option.key, !values[option.key])}
+                  style={({ pressed }) => [styles.notifyRow, { borderBottomColor: colors.border, opacity: pressed ? 0.85 : 1 }]}
+                >
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.menuLabel, { color: colors.foreground }]}>{option.label}</Text>
                     <Text style={[styles.menuDetail, { color: colors.mutedForeground }]}>{option.detail}</Text>
                   </View>
-                  <Switch
-                    testID={`notify-toggle-${option.key}`}
-                    accessibilityLabel={`${option.label} notifications for ${scopeName}`}
-                    value={values[option.key]}
-                    disabled={busy === option.key}
-                    onValueChange={(value) => void toggle(option.key, value)}
-                    trackColor={{ false: colors.border, true: colors.success }}
-                    thumbColor={colors.card}
-                    ios_backgroundColor={colors.border}
-                  />
-                </View>
+                  <View pointerEvents="none">
+                    <Switch
+                      testID={`notify-toggle-${option.key}`}
+                      accessibilityLabel={`${option.label} notifications for ${scopeName}`}
+                      value={values[option.key]}
+                      disabled={busy === option.key}
+                      onValueChange={(value) => void toggle(option.key, value)}
+                      trackColor={{ false: colors.border, true: colors.success }}
+                      thumbColor={colors.card}
+                      ios_backgroundColor={colors.border}
+                    />
+                  </View>
+                </Pressable>
               ))}
             </View>
             {error ? <Text style={[uiStyles.saveError, { color: colors.destructive }]} accessibilityLiveRegion="polite">{error}</Text> : null}
@@ -1403,7 +1416,7 @@ const styles = StyleSheet.create({
   circleMark: { borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   circleMarkText: { fontFamily: 'Inter_700Bold', letterSpacing: 0.2 },
   activeChip: { flexDirection: 'row', gap: 4, alignItems: 'center', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
-  activeChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 10.5 },
+  activeChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   circleAction: { minWidth: 68, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   circleActionText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   switchNote: { fontFamily: 'Inter_400Regular', fontSize: 11.5, lineHeight: 16, marginTop: 10 },
@@ -1414,9 +1427,10 @@ const styles = StyleSheet.create({
   themeRow: { flexDirection: 'row', gap: 8 },
   themeChip: { flex: 1, minHeight: 46, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1 },
   themeChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
-  notifyChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center' },
+  notifyScopeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  notifyChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, flexShrink: 1, justifyContent: 'center' },
   notifyChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
-  notifyRow: { flexDirection: 'row', alignItems: 'center', gap: 14, borderBottomWidth: 1, paddingVertical: 14 },
+  notifyRow: { flexDirection: 'row', alignItems: 'center', gap: 14, borderBottomWidth: 1, paddingVertical: 14, minHeight: 64 },
   fieldFootnote: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16, marginTop: 9 },
   stateNote: { borderWidth: 1, borderRadius: 18, padding: 14, flexDirection: 'row', gap: 11 },
   stateIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
@@ -1493,7 +1507,7 @@ const styles = StyleSheet.create({
   noticeCard: { borderWidth: 1, borderRadius: 18, padding: 15, flexDirection: 'row', gap: 11, marginTop: 16 },
   noticeTitle: { fontFamily: 'Inter_700Bold', fontSize: 13 },
   noticeText: { fontFamily: 'Inter_400Regular', fontSize: 11, lineHeight: 16, marginTop: 4 },
-  noticeAction: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 12, paddingHorizontal: 13, paddingVertical: 10, marginTop: 11 },
+  noticeAction: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 44, marginTop: 11, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' },
   noticeActionText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   dangerButton: { height: 49, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   dangerButtonText: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
