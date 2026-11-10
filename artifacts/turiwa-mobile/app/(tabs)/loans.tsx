@@ -186,7 +186,7 @@ export default function LoansScreen() {
   return (
     <>
       <Screen>
-        <BrandHeader title="Loans" subtitle="Access what you need, with clarity." actions={<CircleSwitcher />} />
+        <BrandHeader title="Loans" subtitle="Access what you need, with clarity." actions={<CircleSwitcher />} stackActions />
         <LinearGradient
           colors={isDark ? ['#051811', '#0B2D21'] : ['#022E20', '#04432F']}
           start={{ x: 0, y: 0 }}
@@ -201,7 +201,7 @@ export default function LoansScreen() {
             <Text testID="loan-lendable" style={[styles.creditValue, { color: colors.heroForeground }]}>{kesLabel(lendable).replace('KES ', '')}</Text>
           </View>
           <View style={styles.creditFooter}>
-            <View>
+            <View style={styles.creditFooterCopy}>
               <Text style={[styles.creditLabel, { color: colors.heroMuted }]}>{scoped ? 'You still owe this circle' : 'You still owe the fund'}</Text>
               <Text testID="loan-outstanding" style={[styles.creditMeta, { color: colors.heroForeground }]}>
                 {myOutstanding > 0
@@ -261,9 +261,9 @@ export default function LoansScreen() {
                       <View style={[styles.adminApprovalIcon, { backgroundColor: colors.goldSoft }]}>
                         <MaterialCommunityIcons name="crown" size={20} color={colors.accentForeground} />
                       </View>
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                          <Text style={[styles.adminApprovalTitle, { color: colors.foreground }]} numberOfLines={1}>
+                      <View style={styles.adminApprovalCopy}>
+                        <View style={styles.adminApprovalTitleRow}>
+                          <Text style={[styles.adminApprovalTitle, { color: colors.foreground }]}>
                             {loan.purpose}
                           </Text>
                           <View style={[styles.adminReviewBadge, { backgroundColor: colors.goldSoft, borderColor: colors.gold }]}>
@@ -869,7 +869,10 @@ const styles = StyleSheet.create({
   creditValueRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 10 },
   creditCurrency: { fontFamily: 'Inter_600SemiBold', fontSize: 16, letterSpacing: 0.5, opacity: 0.8 },
   creditValue: { fontFamily: 'Inter_700Bold', fontSize: 34, letterSpacing: -1 },
-  creditFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 22 },
+  creditFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 22, gap: 10 },
+  // The sentence beside the chip is longer than a 320px hero can hold next to it, so it takes the
+  // remaining width and wraps instead of pushing the chip out of the card.
+  creditFooterCopy: { flex: 1, minWidth: 0 },
   creditLabel: { fontFamily: 'Inter_400Regular', fontSize: 11 },
   creditMeta: { fontFamily: 'Inter_600SemiBold', fontSize: 12, marginTop: 4 },
   creditMark: { flexDirection: 'row', gap: 5, alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
@@ -882,12 +885,15 @@ const styles = StyleSheet.create({
   loanCard: { borderWidth: 1, borderRadius: 20, padding: 16 },
   loanCardTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   loanIcon: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  loanTitleWrap: { flex: 1 },
+  loanTitleWrap: { flex: 1, minWidth: 0 },
   loanName: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
   loanMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 5 },
-  statusBadge: { borderRadius: 12, paddingHorizontal: 8, paddingVertical: 6 },
+  // The badge states a status, so it is the one thing in that row that must not be squeezed:
+  // the purpose text is what gives way.
+  statusBadge: { borderRadius: 12, paddingHorizontal: 8, paddingVertical: 6, flexShrink: 0 },
   statusBadgeText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
-  balanceRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 19 },
+  // Two figures the borrower compares side by side; at 320px they stack rather than clip.
+  balanceRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 19, gap: 12, flexWrap: 'wrap' },
   balanceLabel: { fontFamily: 'Inter_400Regular', fontSize: 11 },
   balanceValue: { fontFamily: 'Inter_700Bold', fontSize: 20, letterSpacing: -0.4, marginTop: 5 },
   monthlyValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13, marginTop: 9 },
@@ -912,7 +918,9 @@ const styles = StyleSheet.create({
   historyRowTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   historyPurpose: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
   historyMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4 },
-  historyAmounts: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
+  // Three figures that must stay readable as a set. At 320px they cannot sit in one row, and the
+  // honest way to keep every digit is to let the set wrap rather than shrink the amounts.
+  historyAmounts: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 14, gap: 12, rowGap: 14, flexWrap: 'wrap' },
   historyAmountLabel: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 },
   historyAmountValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13, marginTop: 5 },
   modalEyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.7, marginBottom: 9 },
@@ -935,9 +943,14 @@ const styles = StyleSheet.create({
   adminApprovalCard: { borderWidth: 1, borderRadius: 18, padding: 15, marginBottom: 10 },
   adminApprovalTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   adminApprovalIcon: { width: 40, height: 40, borderRadius: 13, justifyContent: 'center', alignItems: 'center' },
+  // minWidth 0 is what lets this column give way to the card edge instead of widening it.
+  adminApprovalCopy: { flex: 1, minWidth: 0 },
+  // At 320px the purpose and its PENDING chip cannot share one line without the name losing
+  // half its letters, so the row wraps and the chip drops below a fully spelled-out purpose.
+  adminApprovalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', rowGap: 6 },
   adminApprovalTitle: { fontFamily: 'Inter_700Bold', fontSize: 14 },
   adminApprovalMeta: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 4, lineHeight: 16 },
-  adminReviewBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
+  adminReviewBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2, flexShrink: 0 },
   adminReviewBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 0.8 },
   approveActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 10 },
   loanDecisionActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },

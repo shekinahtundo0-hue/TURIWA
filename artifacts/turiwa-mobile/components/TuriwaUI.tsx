@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Platform, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
-import { useResponsive } from '@/hooks/useResponsive';
+import { TABLET_MIN_WIDTH, useResponsive } from '@/hooks/useResponsive';
 import { cycleNoun, entryDate, entryDelta, frequencyNoun, interestLabel, isOutflow, isSetAside, isLentOut, kesLabel, MAX_KES, RECORDABLE_LEDGER_TYPES, memberLabel, type AppNotification, type Circle, type CircleMember, type Contribution, type Frequency, type LedgerEntry, type LedgerType, type Loan } from '@/lib/api';
 import { circleInviteUrl } from '@/lib/circleInvite';
 
@@ -128,11 +128,16 @@ export function useSheet(): {
   };
 }
 
-export function BrandHeader({ eyebrow = 'TURIWA', title, subtitle, onNotification, notificationCount = 0, actions, onBack }: { eyebrow?: string; title: string; subtitle?: string; onNotification?: () => void; notificationCount?: number; actions?: React.ReactNode; onBack?: () => void }) {
+export function BrandHeader({ eyebrow = 'TURIWA', title, subtitle, onNotification, notificationCount = 0, actions, stackActions = false, onBack }: { eyebrow?: string; title: string; subtitle?: string; onNotification?: () => void; notificationCount?: number; actions?: React.ReactNode; stackActions?: boolean; onBack?: () => void }) {
   const colors = useColors();
-  const type = useResponsive().type;
+  const { type, mode, width } = useResponsive();
+  // The circle pill needs roughly 200px to show a real circle name and the role inside it.
+  // A phone's content box is 280px at 320px wide, so sharing that line with a 44px bell would
+  // clip the name; the screen that passes the pill asks for its own line. A phone turned sideways
+  // is wide but short, so it keeps the single line and spends its scarce height on content.
+  const stacked = mode === 'phone' && width < TABLET_MIN_WIDTH && stackActions;
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, stacked && styles.headerStacked]}>
       {onBack ? (
         <View style={styles.headerBack}>
           <HeaderIconButton testID="header-back" icon="arrow-left" label="Back" onPress={onBack} />
@@ -143,7 +148,7 @@ export function BrandHeader({ eyebrow = 'TURIWA', title, subtitle, onNotificatio
         <Text numberOfLines={2} style={[styles.headerTitle, { color: colors.foreground, fontSize: type.screenTitle }]}>{title}</Text>
         {subtitle ? <Text style={[styles.headerSubtitle, { color: colors.mutedForeground, fontSize: type.subtitle }]}>{subtitle}</Text> : null}
       </View>
-      <View style={styles.headerActions}>
+      <View style={[styles.headerActions, stacked && styles.headerActionsStacked]}>
         {actions}
         {onNotification ? (
           <Pressable testID="notifications-button" onPress={onNotification} accessibilityRole="button" accessibilityLabel={notificationCount > 0 ? `Notifications, ${notificationCount} ${notificationCount === 1 ? 'item' : 'items'}` : 'Notifications'} style={({ pressed }) => [styles.iconButton, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}>
@@ -2094,10 +2099,12 @@ export const styles = StyleSheet.create({
   offlineBanner: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 14, paddingHorizontal: 13, paddingVertical: 11, marginBottom: 12 },
   offlineText: { fontFamily: 'Inter_500Medium', fontSize: 12, lineHeight: 17, flex: 1 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 25 },
+  headerStacked: { flexWrap: 'wrap', rowGap: 6 },
   // Long names (e.g. "Good morning, <name>") must wrap inside the column rather than run under the bell.
   headerCopy: { flex: 1, paddingRight: 12 },
   headerBack: { marginRight: 12, paddingTop: 20 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerActionsStacked: { flexBasis: '100%', justifyContent: 'flex-end' },
   eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 12, letterSpacing: 2.2, marginBottom: 8 },
   headerTitle: { fontFamily: 'Inter_700Bold', fontSize: 28, letterSpacing: -0.8 },
   headerSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 14, marginTop: 7 },

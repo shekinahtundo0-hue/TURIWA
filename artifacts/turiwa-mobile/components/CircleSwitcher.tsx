@@ -310,9 +310,10 @@ function FooterLink({ icon, label, onPress }: { icon: keyof typeof Feather.glyph
 
 const styles = StyleSheet.create({
   triggerWrap: { position: 'relative', maxWidth: 190, zIndex: 40 },
-  // The header has a greeting and a bell beside it, so a phone gets a narrower pill and
-  // lets the name truncate rather than pushing the bell off a 320px screen.
-  triggerWrapPhone: { maxWidth: 132 },
+  // On a phone the header gives this pill its own line, so it can be wide enough to spell out
+  // the circle rather than truncating "UI Loan Circle" to "UI Lo…"; the cap only matters for a
+  // name long enough to need truncating, which is what numberOfLines above is for.
+  triggerWrapPhone: { maxWidth: 260 },
   trigger: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 10, borderRadius: 14, borderWidth: 1 },
   triggerMark: { width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   // minWidth 0 is what lets a long circle name truncate instead of widening the header past 320px.

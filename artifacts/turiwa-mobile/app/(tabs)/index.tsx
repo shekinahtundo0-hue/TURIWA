@@ -113,6 +113,7 @@ export default function HomeScreen() {
           onNotification={() => setNotificationsVisible(true)}
           notificationCount={unreadCount}
           actions={<CircleSwitcher />}
+          stackActions
         />
         <View style={[styles.overview, wide && styles.overviewWide]}>
           <View style={[styles.heroWrap, wide && styles.heroWrapWide]}>

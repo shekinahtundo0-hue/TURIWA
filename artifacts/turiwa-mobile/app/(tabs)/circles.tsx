@@ -59,7 +59,7 @@ export default function CirclesScreen() {
   return (
     <>
       <Screen refreshing={refreshing} onRefresh={refresh}>
-        <BrandHeader title="Your circles" subtitle={`${circles.length} ${circles.length === 1 ? 'group' : 'groups'} · everything in one place`} actions={<CircleSwitcher />} />
+        <BrandHeader title="Your circles" subtitle={`${circles.length} ${circles.length === 1 ? 'group' : 'groups'} · everything in one place`} actions={<CircleSwitcher />} stackActions />
         <View style={[styles.summary, { backgroundColor: colors.warmSurface, borderColor: colors.goldBorder }]}>
           <View style={[styles.summaryIcon, { backgroundColor: colors.accent }]}><MaterialCommunityIcons name="hand-heart-outline" size={21} color={colors.onAccent} /></View>
           <View style={{ flex: 1 }}><Text style={[styles.summaryTitle, { color: colors.foreground }]}>Together, you go further</Text><Text style={[styles.summaryCopy, { color: colors.inkSoft }]}>Every contribution builds trust and momentum.</Text></View>
