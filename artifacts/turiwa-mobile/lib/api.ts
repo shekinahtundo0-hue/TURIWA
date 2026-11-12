@@ -102,9 +102,10 @@ export const isSetAside = (type: LedgerType) => type === 'Welfare';
 export const isLentOut = (type: LedgerType) => type === 'LoanDisbursement';
 /** An entry the API wrote for a loan, rather than somebody typing it in. */
 export const isLoanEntry = (item: { loanId: string | null }) => item.loanId !== null;
-/** An entry's effect on the money the group can still spend: an expense, a welfare
- *  set-aside and the cash a loan hands over all reduce it, everything else adds. */
-export const entryDelta = (type: LedgerType) => (isOutflow(type) || isSetAside(type) || isLentOut(type) ? -1 : 1);
+/** Only recognised ledger kinds affect cash; an unknown kind is not a receipt. */
+export const entryDelta = (type: LedgerType) =>
+  isOutflow(type) || isSetAside(type) || isLentOut(type) ? -1 :
+    type === 'Contribution' || type === 'Repayment' || type === 'Fine' ? 1 : 0;
 
 /** A running loan whose recorded due day has passed. A loan with no due day on record
  *  is not called overdue — the app does not know — and a request nobody has approved
@@ -119,6 +120,7 @@ export const repaidOnRecord = (loan: { totalPayable: number; balance: number }) 
 
 /** What the ledger sheet records: the kind of entry plus who it is attributed to. */
 export type LedgerEntry = { type: LedgerType; member: string | null };
+export type ContributionMetadata = { idempotencyKey: string; memberId?: string | null };
 
 export type CircleMember = {
   id: string;
@@ -178,6 +180,7 @@ export type Contribution = {
   status: 'Complete' | 'Pending';
   type: LedgerType;
   member: string | null;
+  attributedMemberId: string | null;
   // Set when the entry is a loan's own money: the payout the fund made or an
   // instalment it received. It tells the ledger which loan the row belongs to.
   loanId: string | null;
@@ -394,8 +397,10 @@ function webApiBase(): string {
 export const API_BASE = (Platform.OS === 'web' ? webApiBase() : (process.env.EXPO_PUBLIC_API_URL ?? defaultApiBase())).replace(/\/+$/, '');
 
 let authToken: string | null = null;
+let authGeneration = 0;
 
 export function setAuthToken(token: string | null): void {
+  authGeneration += 1;
   authToken = token;
 }
 
@@ -431,37 +436,58 @@ export function isRetryable(err: unknown): boolean {
 // good. The bearer exchange after a Google sign-in is the slow one this exists for.
 const REQUEST_TIMEOUT_MS = 25_000;
 
+export class SessionChangedError extends Error {
+  constructor() {
+    super('This session has changed. Please try again.');
+    this.name = 'AbortError';
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = authToken;
+  const generation = authGeneration;
+  const checkSession = () => {
+    if (token !== authToken || generation !== authGeneration) throw new SessionChangedError();
+  };
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const abort = () => controller.abort();
+  init?.signal?.addEventListener('abort', abort, { once: true });
+  if (init?.signal?.aborted) abort();
+  const timer = setTimeout(abort, REQUEST_TIMEOUT_MS);
   const where = API_BASE || (Platform.OS === 'web' ? window.location.origin : 'the configured API');
-  let response: Response;
   try {
-    response = await fetch(`${API_BASE}/api${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-        ...init?.headers,
-      },
-    });
-  } catch {
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/api${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...init?.headers,
+        },
+      });
+    } catch {
+      throw new Error(`Cannot reach the Turiwa API at ${where}.`);
+    }
+    if (!response.ok) throw new ApiError(await parseError(response), response.status);
+    const result = response.status === 204 ? undefined : await response.json();
+    // JSON parsing can outlive a session too, not only the fetch itself.
+    checkSession();
+    if (controller.signal.aborted) throw new Error('Request cancelled.');
+    return result as T;
+  } catch (err) {
+    checkSession();
+    if (init?.signal?.aborted) throw new SessionChangedError();
     if (controller.signal.aborted) {
       throw new Error(`The Turiwa API at ${where} did not answer in time. Check the connection and try again.`);
     }
-    throw new Error(`Cannot reach the Turiwa API at ${where}.`);
+    throw err;
   } finally {
     clearTimeout(timer);
+    init?.signal?.removeEventListener('abort', abort);
   }
-
-  if (!response.ok) {
-    throw new ApiError(await parseError(response), response.status);
-  }
-
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
 }
 
 export type SavingsGoalRecord = { id: string; circleId: string; name: string; description: string; category: string; targetAmount: number; startOn: string; targetOn: string; frequency: string; status: string; amountSaved: number; contributions: Contribution[] };
@@ -509,10 +535,14 @@ export function addContribution(
   note: string,
   circleId?: string,
   entry?: { type?: LedgerType; member?: string | null },
+  metadata?: ContributionMetadata,
 ) {
   return request<AppState>('/contributions', {
     method: 'POST',
-    body: JSON.stringify({ amount, note, circleId, type: entry?.type ?? 'Contribution', member: entry?.member ?? null }),
+    body: JSON.stringify({
+      amount, note, circleId, type: entry?.type ?? 'Contribution', member: entry?.member ?? null,
+      idempotencyKey: metadata?.idempotencyKey, memberId: metadata?.memberId,
+    }),
   });
 }
 
@@ -624,10 +654,11 @@ export function signInWithGoogle(idToken: string) {
   });
 }
 
-export function signUp(name: string, phone: string, password: string) {
+export function signUp(name: string, phone: string, password: string, verificationToken: string, signal?: AbortSignal) {
   return request<AuthSession>('/auth/sign-up', {
     method: 'POST',
-    body: JSON.stringify({ name, phone, password }),
+    body: JSON.stringify({ name, phone, password, verificationToken }),
+    signal,
   });
 }
 
@@ -643,17 +674,19 @@ export function fetchMe() {
   return request<{ user: AuthUser }>('/auth/me');
 }
 
-export function requestSignUpCode(phone: string) {
+export function requestSignUpCode(phone: string, signal?: AbortSignal) {
   return request<{ code?: string; expiresInMinutes: number }>('/auth/otp', {
     method: 'POST',
     body: JSON.stringify({ phone }),
+    signal,
   });
 }
 
-export function verifySignUpCode(phone: string, code: string) {
-  return request<{ ok: boolean }>('/auth/otp/verify', {
+export function verifySignUpCode(phone: string, code: string, signal?: AbortSignal) {
+  return request<{ ok: true; verificationToken: string }>('/auth/otp/verify', {
     method: 'POST',
     body: JSON.stringify({ phone, code }),
+    signal,
   });
 }
 
@@ -721,22 +754,30 @@ export function subscribeToState(
   onState: (state: AppState) => void,
   onError?: (err: unknown) => void,
 ): () => void {
-  const query = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
+  const token = authToken;
+  const generation = authGeneration;
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
   const url = `${API_BASE}/api/events${query}`;
   let closed = false;
+  const isCurrent = () => !closed && generation === authGeneration && token === authToken;
   let source: EventSource | null = null;
   // `new EventSource()` returns an object whether or not the server ever accepts the
   // stream, so the push connection is tracked on its own, not by `source` being set.
   let streaming = false;
+  let polling = false;
   let timer: ReturnType<typeof setInterval> | undefined;
 
   const poll = async () => {
-    if (closed) return;
+    if (!isCurrent() || polling) return;
+    polling = true;
     try {
-      onState(await fetchState());
+      const state = await fetchState();
+      if (isCurrent()) onState(state);
     } catch (err) {
-      // Keep the last known state while reconnecting, but let the screen say so.
-      onError?.(err);
+      // A request can outlive cleanup or an A -> B -> A session change.
+      if (isCurrent()) onError?.(err);
+    } finally {
+      polling = false;
     }
   };
 
@@ -744,27 +785,32 @@ export function subscribeToState(
   // at the connected rate there would leave a screen twenty seconds behind the group.
   const reschedule = () => {
     if (timer) clearInterval(timer);
-    timer = setInterval(poll, streaming ? 20000 : 3000);
+    if (isCurrent()) timer = setInterval(poll, streaming ? 20000 : 3000);
+  };
+
+  const onStateEvent = (event: Event) => {
+    if (!isCurrent()) return;
+    try {
+      onState(JSON.parse((event as MessageEvent).data) as AppState);
+    } catch {
+      // ignore malformed frames
+    }
   };
 
   if (typeof EventSource !== 'undefined') {
     try {
       source = new EventSource(url);
       source.onopen = () => {
+        if (!isCurrent()) return;
         streaming = true;
         reschedule();
       };
       source.onerror = () => {
+        if (!isCurrent()) return;
         streaming = false;
         reschedule();
       };
-      source.addEventListener('state', (event) => {
-        try {
-          onState(JSON.parse((event as MessageEvent).data) as AppState);
-        } catch {
-          // ignore malformed frames
-        }
-      });
+      source.addEventListener('state', onStateEvent);
     } catch {
       source = null;
     }
@@ -776,6 +822,11 @@ export function subscribeToState(
   return () => {
     closed = true;
     if (timer) clearInterval(timer);
-    source?.close();
+    if (source) {
+      source.onopen = null;
+      source.onerror = null;
+      source.removeEventListener('state', onStateEvent);
+      source.close();
+    }
   };
 }

@@ -1,8 +1,10 @@
 import { randomBytes, randomInt } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
-import { and, eq, lt, ne } from "drizzle-orm";
+import { and, eq, gt, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { authCodesTable, getDb, sessionsTable, usersTable, type AuthCode, type User } from "@workspace/db";
 import { newId } from "./ids";
+
+type AuthTransaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 
 const SESSION_DAYS = 30;
 const CODE_MINUTES = 10;
@@ -59,8 +61,11 @@ export async function destroySession(token: string): Promise<void> {
   await db.delete(sessionsTable).where(eq(sessionsTable.token, token));
 }
 
-export async function destroyUserSessions(userId: string, exceptToken?: string): Promise<void> {
-  const db = getDb();
+export async function destroyUserSessions(
+  userId: string,
+  exceptToken?: string,
+  db: Pick<ReturnType<typeof getDb>, "delete"> = getDb(),
+): Promise<void> {
   if (exceptToken) {
     await db.delete(sessionsTable).where(and(eq(sessionsTable.userId, userId), ne(sessionsTable.token, exceptToken)));
   } else {
@@ -112,89 +117,106 @@ export async function issueCode(
   phone: string,
   purpose: string,
   digits: number,
-): Promise<{ code: string; retried: boolean }> {
-  const db = getDb();
-  const [existing] = await db
-    .select()
-    .from(authCodesTable)
-    .where(and(eq(authCodesTable.phone, phone), eq(authCodesTable.purpose, purpose)))
-    .limit(1);
-  // Repeated requests inside the resend window keep the same code, so hammering
-  // this endpoint cannot hand an attacker an endless stream of fresh guesses.
-  if (
-    existing &&
-    existing.expiresAt.getTime() > Date.now() &&
-    Date.now() - existing.createdAt.getTime() < CODE_RESEND_MS
-  ) {
-    return { code: existing.code, retried: true };
-  }
+): Promise<{ code: string | null; retried: boolean }> {
+  return getDb().transaction(async (tx) => {
+    // A row lock alone cannot serialize two first requests when no row exists yet.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${phone}), hashtext(${purpose}))`);
+    const [existing] = await tx
+      .select()
+      .from(authCodesTable)
+      .where(and(eq(authCodesTable.phone, phone), eq(authCodesTable.purpose, purpose)))
+      .limit(1)
+      .for("update");
+    // Preserve exhausted rows through the resend window so a retry cannot reset
+    // the guess budget. A verified row holds a private proof, NEVER an SMS code.
+    if (
+      existing &&
+      existing.expiresAt.getTime() > Date.now() &&
+      Date.now() - existing.createdAt.getTime() < CODE_RESEND_MS
+    ) {
+      return { code: existing.verifiedAt ? null : existing.code, retried: true };
+    }
 
-  const code = Array.from({ length: digits }, () => String(randomInt(10))).join("");
-  await db.delete(authCodesTable).where(and(eq(authCodesTable.phone, phone), eq(authCodesTable.purpose, purpose)));
-  await db.insert(authCodesTable).values({
-    id: newId("code"),
-    phone,
-    purpose,
-    code,
-    expiresAt: new Date(Date.now() + CODE_MINUTES * 60 * 1000),
+    const code = Array.from({ length: digits }, () => String(randomInt(10))).join("");
+    await tx.delete(authCodesTable).where(and(eq(authCodesTable.phone, phone), eq(authCodesTable.purpose, purpose)));
+    await tx.insert(authCodesTable).values({
+      id: newId("code"),
+      phone,
+      purpose,
+      code,
+      expiresAt: new Date(Date.now() + CODE_MINUTES * 60 * 1000),
+    });
+    return { code, retried: false };
   });
-  return { code, retried: false };
 }
 
-// Every code answer goes through the same gate: the row has to exist, still be
-// inside its ten minutes, have tries left, and match. Only what happens to the row
-// afterwards differs between flows, so the gate is written once.
-async function matchCode(phone: string, purpose: string, code: string): Promise<AuthCode | null> {
-  const db = getDb();
-  const [row] = await db
+// Hold this row lock until the enclosing transaction commits the attempt, proof
+// replacement or consumption. Verified proofs must never be accepted as OTPs.
+async function matchCode(
+  phone: string,
+  purpose: string,
+  code: string,
+  tx: AuthTransaction,
+): Promise<AuthCode | null> {
+  const [row] = await tx
     .select()
     .from(authCodesTable)
     .where(and(eq(authCodesTable.phone, phone), eq(authCodesTable.purpose, purpose)))
-    .limit(1);
-  if (!row) return null;
-  if (row.expiresAt.getTime() <= Date.now() || row.attempts >= MAX_CODE_ATTEMPTS) {
-    await db.delete(authCodesTable).where(eq(authCodesTable.id, row.id));
-    return null;
-  }
+    .limit(1)
+    .for("update");
+  if (!row || row.verifiedAt) return null;
+  if (row.expiresAt.getTime() <= Date.now() || row.attempts >= MAX_CODE_ATTEMPTS) return null;
   if (row.code !== code) {
-    await db.update(authCodesTable).set({ attempts: row.attempts + 1 }).where(eq(authCodesTable.id, row.id));
+    await tx.update(authCodesTable).set({ attempts: row.attempts + 1 }).where(eq(authCodesTable.id, row.id));
     return null;
   }
   return row;
 }
 
-export async function consumeCode(phone: string, purpose: string, code: string): Promise<boolean> {
-  const row = await matchCode(phone, purpose, code);
+export async function consumeCode(
+  phone: string,
+  purpose: string,
+  code: string,
+  tx?: AuthTransaction,
+): Promise<boolean> {
+  if (!tx) return getDb().transaction((executor) => consumeCode(phone, purpose, code, executor));
+  const row = await matchCode(phone, purpose, code, tx);
   if (!row) return false;
-  await getDb().delete(authCodesTable).where(eq(authCodesTable.id, row.id));
+  await tx.delete(authCodesTable).where(eq(authCodesTable.id, row.id));
   return true;
 }
 
-// A sign-up code proves a phone before there is an account to hang the proof on, so
-// verifying it marks the row instead of deleting it — creating the account is what
-// spends it. Without that, POST /sign-up would have nothing to check and any caller
-// could open an account on a number they do not own.
-export async function markCodeVerified(phone: string, purpose: string, code: string): Promise<boolean> {
-  const row = await matchCode(phone, purpose, code);
-  if (!row || row.verifiedAt) return false;
-  await getDb()
-    .update(authCodesTable)
-    .set({ verifiedAt: new Date() })
-    .where(eq(authCodesTable.id, row.id));
-  return true;
+// Replace the OTP with an unguessable, caller-held proof. Only the request that
+// successfully verifies the OTP receives it; account creation spends that proof.
+export async function markCodeVerified(phone: string, purpose: string, code: string): Promise<string | null> {
+  return getDb().transaction(async (tx) => {
+    const row = await matchCode(phone, purpose, code, tx);
+    if (!row) return null;
+    const verificationToken = randomBytes(32).toString("hex");
+    await tx
+      .update(authCodesTable)
+      .set({ code: verificationToken, verifiedAt: new Date() })
+      .where(eq(authCodesTable.id, row.id));
+    return verificationToken;
+  });
 }
 
-export async function spendVerifiedCode(phone: string, purpose: string): Promise<boolean> {
-  const db = getDb();
-  const [row] = await db
-    .select()
-    .from(authCodesTable)
-    .where(and(eq(authCodesTable.phone, phone), eq(authCodesTable.purpose, purpose)))
-    .limit(1);
-  if (!row?.verifiedAt || row.expiresAt.getTime() <= Date.now()) return false;
-  // Proof is single-use. A code that has not been proved yet stays in place, because
-  // a sign-up rejected for an unrelated reason — a duplicate number, a short
-  // password — should not make someone start the whole code round again.
-  await db.delete(authCodesTable).where(eq(authCodesTable.id, row.id));
-  return true;
+export async function spendVerifiedCode(
+  phone: string,
+  purpose: string,
+  verificationToken: string,
+  db: Pick<ReturnType<typeof getDb>, "delete"> = getDb(),
+): Promise<boolean> {
+  // Reject legacy verified numeric codes as well as missing/malformed proofs.
+  if (!/^[a-f0-9]{64}$/.test(verificationToken)) return false;
+  // DELETE takes a row lock and rechecks its predicate after concurrent writes.
+  // The caller passes its transaction so failed account creation restores proof.
+  const spent = await db.delete(authCodesTable).where(and(
+    eq(authCodesTable.phone, phone),
+    eq(authCodesTable.purpose, purpose),
+    eq(authCodesTable.code, verificationToken),
+    isNotNull(authCodesTable.verifiedAt),
+    gt(authCodesTable.expiresAt, new Date()),
+  )).returning({ id: authCodesTable.id });
+  return spent.length > 0;
 }

@@ -178,16 +178,20 @@ export async function savePreference(
     .where(
       and(
         eq(notificationPreferencesTable.userId, userId),
-        eq(notificationPreferencesTable.circleId, circleId),
+        inArray(notificationPreferencesTable.circleId, circleId ? [circleId, ""] : [""]),
       ),
     );
-  const current = existing[0];
+  const current = existing.find((row) => row.circleId === circleId);
+  // Creating a circle override snapshots the effective account-wide defaults,
+  // rather than re-enabling every switch not present in this partial update.
+  // An existing override remains independent of subsequent global changes.
+  const inherited = current ?? existing.find((row) => row.circleId === "");
   const values = {
-    contributionReminders: settings.contributionReminders ?? current?.contributionReminders ?? true,
-    loanReminders: settings.loanReminders ?? current?.loanReminders ?? true,
-    meetingReminders: settings.meetingReminders ?? current?.meetingReminders ?? true,
-    savingsUpdates: settings.savingsUpdates ?? current?.savingsUpdates ?? true,
-    voteReminders: settings.voteReminders ?? current?.voteReminders ?? true,
+    contributionReminders: settings.contributionReminders ?? inherited?.contributionReminders ?? true,
+    loanReminders: settings.loanReminders ?? inherited?.loanReminders ?? true,
+    meetingReminders: settings.meetingReminders ?? inherited?.meetingReminders ?? true,
+    savingsUpdates: settings.savingsUpdates ?? inherited?.savingsUpdates ?? true,
+    voteReminders: settings.voteReminders ?? inherited?.voteReminders ?? true,
   };
   if (current) {
     await executor

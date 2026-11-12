@@ -52,12 +52,8 @@ export default function LoansScreen() {
   const administeredCircles = circles.filter((circle) => canManageCircle(circle, user?.id ?? ''));
   const isUserAdminOrCoAdmin = administeredCircles.length > 0;
   const administeredIds = new Set(administeredCircles.map((circle) => circle.id));
-  // An admin decides on the requests that came through their own groups. A request
-  // raised through someone else's group is not theirs to approve, and the button
-  // would be a lie. Their own request is listed too: an administrator's application is
-  // decided as it is sent, so a pending one here arrived before they administered.
   const pendingApprovals = loans.filter(
-    (loan) => loan.status === 'Pending' && loan.circleId !== null && administeredIds.has(loan.circleId) && inScope(loan),
+    (loan) => loan.status === 'Pending' && loan.applicantId !== user?.id && loan.circleId !== null && administeredIds.has(loan.circleId) && inScope(loan),
   );
   const runningLoans = loans.filter((loan) => loan.status === 'Active' && inScope(loan));
   const lateLoans = runningLoans.filter((loan) => isOverdue(loan));
@@ -114,9 +110,10 @@ export default function LoansScreen() {
     const loan = loans.find((item) => item.id === requestedLoanId);
     if (!loan) return;
     autoOpenedForLoan.current = true;
-    if (loan.status === 'Pending') openReview(loan);
-    else setRepaymentFor(loan);
-  }, [loans, requestedLoanId]);
+    if (loan.circleId) setActiveCircle(loan.circleId);
+    if (loan.status === 'Pending' && loan.applicantId !== user?.id && loan.circleId && administeredIds.has(loan.circleId)) openReview(loan);
+    else if (loan.status === 'Active' && loan.applicantId === user?.id) setRepaymentFor(loan);
+  }, [loans, requestedLoanId, user?.id, setActiveCircle]);
 
   const handleApprove = async (loanId: string) => {
     if (approvingLoanId || rejectingLoanId) return;
@@ -614,9 +611,7 @@ function LoanApplicationModal({ visible, onClose, onSave, circles, finance, user
     if (visible) setApplicationKey(newApplicationKey());
   }, [visible]);
   const selected = circles.find((item) => item.id === circleId) ?? circles.find((item) => item.id === initialCircleId) ?? circles[0];
-  // The API decides an administrator's own request as it arrives, from the circle's
-  // roster. Saying anything else on screen would promise a review that never happens.
-  const selfApproved = selected ? canManageCircle(selected, userId) : false;
+  const isApplicantAdmin = selected ? canManageCircle(selected, userId) : false;
   // The ceiling is one group's own cash — the same figure the API refuses a loan
   // above — not a credit score or a limit nobody can point at in the ledger.
   const ceiling = selected ? Math.max(finance.savedFor(selected.id), 0) : 0;
@@ -624,12 +619,10 @@ function LoanApplicationModal({ visible, onClose, onSave, circles, finance, user
   const rate = selected?.loanInterestPercent ?? 5;
   const period = selected?.loanInterestPeriod ?? 'Month';
   const quote = quoteLoan(requested, rate, period, preferredMonths);
-  const valid = selected !== undefined && requested >= MIN_LOAN && requested <= ceiling && purpose.trim().length > 0 && !submitting;
+  const valid = selected !== undefined && Number.isInteger(requested) && requested >= MIN_LOAN && requested <= ceiling && purpose.trim().length > 0 && !submitting;
   const confirmSubmit = () => {
     if (!valid || !selected || submitting) return;
-    const confirmation = `Apply for KES ${requested.toLocaleString()} over ${preferredMonths} months for “${purpose.trim()}” in ${selected.name}? ${selfApproved
-      ? `You administer this circle, so the request is decided as you send it and the money leaves its savings at once.`
-      : 'Another circle admin must review it before any money moves.'}`;
+    const confirmation = `Apply for KES ${requested.toLocaleString()} over ${preferredMonths} months for “${purpose.trim()}” in ${selected.name}? Another circle admin must review it before any money moves. You cannot approve your own application.`;
     if (Platform.OS === 'web') {
       if (typeof window !== 'undefined' && window.confirm(confirmation)) void save();
       return;
@@ -725,8 +718,8 @@ function LoanApplicationModal({ visible, onClose, onSave, circles, finance, user
             </Text>
             {submissionError ? <Text testID="loan-application-error" style={[styles.validation, { color: colors.destructive }]}>{submissionError}</Text> : null}
             <Text testID="loan-application-review-note" style={[styles.pendingNote, { color: colors.mutedForeground }]}>
-              {selfApproved
-                ? `You administer ${selected?.name ?? 'this group'}, so this request is approved the moment the group's rules allow it, and ${kesLabel(quote.totalPayable)} is recorded as paid out from its savings. Repay it over ${quote.months} months.`
+              {isApplicantAdmin
+                ? `Another admin of ${selected?.name ?? 'this group'} must review your request. You cannot approve your own loan. No money leaves the group until approval.`
                 : `An admin of ${selected?.name ?? 'your group'} reviews this request before any money moves.`}
             </Text>
             <View style={styles.modalActions}>
@@ -735,7 +728,7 @@ function LoanApplicationModal({ visible, onClose, onSave, circles, finance, user
               </Pressable>
               <Pressable testID="submit-loan-application" accessibilityRole="button" accessibilityState={{ disabled: !valid }} disabled={!valid} onPress={confirmSubmit} style={({ pressed }) => [styles.submitApplication, { backgroundColor: colors.primary, opacity: !valid || pressed ? 0.6 : 1 }]}>
                 {submitting ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Feather name="arrow-right" size={15} color={colors.primaryForeground} />}
-                <Text style={[styles.submitApplicationText, { color: colors.primaryForeground }]}>{submitting ? 'Submitting…' : selfApproved ? 'Apply now' : 'Send for review'}</Text>
+                <Text style={[styles.submitApplicationText, { color: colors.primaryForeground }]}>{submitting ? 'Submitting…' : 'Send for review'}</Text>
               </Pressable>
             </View>
           </ScrollView>

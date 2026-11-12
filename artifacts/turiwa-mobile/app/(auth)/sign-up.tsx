@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AuthButton, AuthField, AuthHeader, AuthShell, ProgressSegments } from '@/components/AuthUI';
 import { useColors } from '@/hooks/useColors';
@@ -21,6 +21,7 @@ export default function SignUpScreen() {
   const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
   const [demoCode, setDemoCode] = useState('');
+  const [verificationToken, setVerificationToken] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -37,6 +38,7 @@ export default function SignUpScreen() {
     try {
       const result = await api.requestSignUpCode(fullPhone);
       setDemoCode(result.code ?? '');
+      setVerificationToken('');
       setOtpSent(true);
       setError('');
     } catch (err) {
@@ -53,7 +55,8 @@ export default function SignUpScreen() {
     }
     setBusy(true);
     try {
-      await api.verifySignUpCode(fullPhone, otp);
+      const proof = await api.verifySignUpCode(fullPhone, otp);
+      setVerificationToken(proof.verificationToken);
       setError('');
       setStep(2);
     } catch (err) {
@@ -64,13 +67,18 @@ export default function SignUpScreen() {
   };
 
   const finish = async () => {
+    if (!verificationToken) {
+      setError('Verify your phone number again before creating the account.');
+      setStep(1);
+      return;
+    }
     if (!name.trim() || password.length < 8) {
       setError('Add your name and a password with at least 8 characters.');
       return;
     }
     setBusy(true);
     try {
-      await createAccount(name, fullPhone, password);
+      await createAccount(name, fullPhone, password, verificationToken);
       router.replace(circleInviteHref(inviteCode) ?? await nextStopAfterAuth());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create your account.');
@@ -116,7 +124,7 @@ export default function SignUpScreen() {
                 </View>
               ) : null}
               <View style={styles.otpLinks}>
-                <Pressable onPress={() => { setOtpSent(false); setOtp(''); }} style={styles.otpLink}><Text style={[styles.changeText, { color: colors.tint }]}>Change number</Text></Pressable>
+                <Pressable onPress={() => { setOtpSent(false); setOtp(''); setVerificationToken(''); setDemoCode(''); }} style={styles.otpLink}><Text style={[styles.changeText, { color: colors.tint }]}>Change number</Text></Pressable>
                 <Pressable onPress={sendCode} disabled={busy} style={styles.otpLink}><Text style={[styles.changeText, { color: colors.mutedForeground }]}>Resend code</Text></Pressable>
               </View>
             </>

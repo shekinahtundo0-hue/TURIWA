@@ -47,7 +47,7 @@ export default function ActivityScreen() {
 
   // Primary filters
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
-  const [circleFilter, setCircleFilter] = useState<'All' | string>('All');
+  const [circleFilter, setCircleFilter] = useState<'All' | string>(activeCircleId ?? 'All');
   const [dateRange, setDateRange] = useState<DateRange>('All');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('All');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('All');
@@ -62,11 +62,9 @@ export default function ActivityScreen() {
   // Pagination / Incremental loading
   const [displayLimit, setDisplayLimit] = useState(PAGE_SIZE);
 
-  // Follow active circle switch
+  // Follow active circle switch, including when that circle is no longer available.
   useEffect(() => {
-    if (activeCircleId) {
-      setCircleFilter(activeCircleId);
-    }
+    setCircleFilter(activeCircleId ?? 'All');
   }, [activeCircleId]);
 
   const circleName = (id: string) => circles.find((item) => item.id === id)?.name ?? 'Unassigned';
@@ -771,6 +769,7 @@ export default function ActivityScreen() {
         onClose={() => setRecordOpen(false)}
         onSave={addContribution}
         circles={circles}
+        initialCircleId={circleFilter === 'All' ? activeCircleId ?? undefined : circleFilter}
       />
 
       {/* Transaction Detail Modal */}

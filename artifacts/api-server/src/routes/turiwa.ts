@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { circlesTable, contributionsTable, getDb, loansTable } from "@workspace/db";
 import { requireAuth, requireAuthForStream, type AuthedRequest } from "../lib/auth";
 import { newId, newJoinCode } from "../lib/ids";
@@ -116,12 +116,20 @@ router.post("/contributions", requireAuth, async (req, res) => {
     });
     return;
   }
-  const type = RECORDABLE_LEDGER_TYPES.includes(requestedType as RecordableLedgerType)
-    ? (requestedType as RecordableLedgerType)
-    : "Contribution";
+  if (!RECORDABLE_LEDGER_TYPES.includes(requestedType as RecordableLedgerType)) {
+    res.status(400).json({ message: "Choose Contribution, Expense or Welfare. Other ledger types cannot be entered manually." });
+    return;
+  }
+  const type = requestedType as RecordableLedgerType;
   const member = String(req.body?.member ?? "").trim().slice(0, 60) || null;
-  if (!Number.isFinite(amount) || amount <= 0) {
-    res.status(400).json({ message: "Enter a valid contribution amount." });
+  const requestedMemberId = req.body?.memberId == null ? null : String(req.body.memberId);
+  const requestKey = String(req.body?.idempotencyKey ?? "");
+  if (!/^[A-Za-z0-9._:-]{8,100}$/.test(requestKey)) {
+    res.status(400).json({ message: "A transaction reference is required. Reopen the form and try again." });
+    return;
+  }
+  if (!Number.isInteger(amount) || amount <= 0) {
+    res.status(400).json({ message: "Enter a whole amount above zero." });
     return;
   }
   if (tooMuchMoney(amount)) {
@@ -132,33 +140,57 @@ router.post("/contributions", requireAuth, async (req, res) => {
     res.status(400).json({ message: "Choose a group to contribute to." });
     return;
   }
-  const circle = await circleForMember(userId, circleId);
-  if (!circle) {
-    res.status(403).json({ message: "That group belongs to another account." });
-    return;
-  }
-  const isManager = canManageCircle(circle, userId);
-  if (!isManager && type !== "Contribution") {
-    res.status(403).json({ message: "Only circle admins can record group expenses and adjustments." });
-    return;
-  }
-
-  const db = getDb();
-  const recordedMember = isManager
-    ? member
-    : ((req as AuthedRequest).user!.name.trim() || "Member");
-  const entryId = newId("c");
-  await db.insert(contributionsTable).values({
-    id: entryId,
-    circleId,
-    userId,
-    amount: Math.round(amount),
-    date: "Just now",
-    note,
-    status: "Complete",
-    type,
-    member: recordedMember,
+  const entryId = `entry-${userId}-${requestKey}`;
+  const result = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
+    const [circle] = await tx.select().from(circlesTable).where(eq(circlesTable.id, circleId)).for("update").limit(1);
+    if (!circle || (circle.createdBy !== userId && !circle.membersList?.some((entry) => entry.id === userId && (entry.status ?? "active") === "active"))) {
+      return { error: "You must be an active member of this circle.", status: 403 as const };
+    }
+    const isManager = canManageCircle(circle, userId);
+    if (!isManager && (type !== "Contribution" || (requestedMemberId !== null && requestedMemberId !== userId))) {
+      return { error: "Members can only record their own contributions.", status: 403 as const };
+    }
+    let attributedId: string | null = userId;
+    let recordedMember: string | null = (req as AuthedRequest).user!.name;
+    if (isManager) {
+      const roster = (circle.membersList ?? []).filter((entry) => (entry.status ?? "active") === "active");
+      const matches = requestedMemberId
+        ? roster.filter((entry) => entry.id === requestedMemberId)
+        : member ? roster.filter((entry) => entry.name.trim().toLowerCase() === member.toLowerCase()) : [];
+      if ((requestedMemberId || member) && matches.length !== 1) {
+        return { error: "Choose one active member by their roster entry, or Circle General.", status: 400 as const };
+      }
+      attributedId = matches[0]?.id ?? null;
+      recordedMember = matches[0]?.name ?? null;
+    }
+    const [existing] = await tx.select().from(contributionsTable).where(eq(contributionsTable.id, entryId)).limit(1);
+    if (existing) {
+      if (existing.circleId === circleId && existing.recordedBy === userId && existing.userId === attributedId && existing.amount === amount && existing.type === type && existing.note === note) {
+        return { ok: true as const, duplicate: true as const, circle, recordedMember };
+      }
+      return { error: "That transaction reference was already used with different details.", status: 409 as const };
+    }
+    if (type === "Expense" || type === "Welfare") {
+      const available = await circleCash(circleId, tx);
+      if (amount > available) return { error: `The circle has ${kes(available)} available. This entry would overdraw its savings.`, status: 409 as const };
+    }
+    const inserted = await tx.insert(contributionsTable).values({
+      id: entryId, circleId, userId: attributedId, recordedBy: userId, amount,
+      date: formatDay(new Date()), note, status: "Complete", type, member: recordedMember,
+    }).onConflictDoNothing().returning({ id: contributionsTable.id });
+    if (!inserted.length) return { error: "That transaction reference was already used. Refresh your ledger before trying again.", status: 409 as const };
+    return { ok: true as const, duplicate: false as const, circle, recordedMember };
   });
+  if ("error" in result) {
+    res.status(result.status ?? 400).json({ message: result.error });
+    return;
+  }
+  if (result.duplicate) {
+    res.json(await publishState(userId));
+    return;
+  }
+  const { circle, recordedMember } = result;
   const actor = (req as AuthedRequest).user!.name;
   const who = recordedMember ?? actor;
   if (type === "Contribution") {
@@ -266,6 +298,7 @@ router.post("/circles/join", requireAuth, async (req, res) => {
   }
 
   const result = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const [circle] = await tx
       .select()
       .from(circlesTable)
@@ -333,6 +366,7 @@ router.delete("/circles/:id/members/:memberId", requireAuth, async (req, res) =>
   const circleId = String(req.params.id);
   const memberId = String(req.params.memberId);
   const result = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const [circle] = await tx
       .select()
       .from(circlesTable)
@@ -420,6 +454,7 @@ router.patch("/circles/:id/members/:memberId/role", requireAuth, async (req, res
     return;
   }
   const result = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const [circle] = await tx.select().from(circlesTable).where(eq(circlesTable.id, circleId)).for("update").limit(1);
     if (!circle) return { error: "That circle could not be found.", status: 404 as const };
     if (!canManageCircle(circle, userId)) return { error: "Only an active circle admin can manage roles.", status: 403 as const };
@@ -429,13 +464,7 @@ router.patch("/circles/:id/members/:memberId/role", requireAuth, async (req, res
     if (target.id === circle.createdBy || target.role === "admin") {
       return { error: "The Primary Admin's role can only change through a Primary Admin transfer.", status: 409 as const };
     }
-    const actor = roster.find((member) => member.id === userId && (member.status ?? "active") === "active");
-    const isPrimaryAdmin = circle.createdBy === userId;
-    const isCoAdmin = actor?.role === "co-admin";
-    if (!isPrimaryAdmin && !isCoAdmin) return { error: "Only an active circle admin can manage roles.", status: 403 as const };
-    if (isCoAdmin && target.role === "co-admin" && (role !== "member" || memberId === userId)) {
-      return { error: "Co-Admins can only demote another Co-Admin, not themselves.", status: 403 as const };
-    }
+    if (circle.createdBy !== userId) return { error: "Only the Primary Admin can assign or remove Co-Admins.", status: 403 as const };
     if (role === "co-admin" && target.role !== "co-admin") {
       const count = roster.filter((member) => member.id !== circle.createdBy && member.role === "co-admin" && (member.status ?? "active") === "active").length;
       if (count >= 2) return { error: "A circle can have at most two Co-Admins.", status: 409 as const };
@@ -469,6 +498,7 @@ router.post("/circles/:id/transfer-primary", requireAuth, async (req, res) => {
   const circleId = String(req.params.id);
   const memberId = String(req.body?.memberId ?? "");
   const result = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const [circle] = await tx.select().from(circlesTable).where(eq(circlesTable.id, circleId)).for("update").limit(1);
     if (!circle) return { error: "That circle could not be found.", status: 404 as const };
     if (circle.createdBy !== userId) return { error: "Only the Primary Admin can transfer circle authority.", status: 403 as const };
@@ -598,37 +628,33 @@ router.post("/circles/:id/fines", requireAuth, async (req, res) => {
   res.status(201).json(await publishState(userId));
 });
 
-// Closing a group removes its ledger with it, so a member is never left holding a
-// group row whose contributions have vanished. The account must still have another
-// group afterwards: the app is built around at least one, and an account with none
-// would open straight onto a "create a circle" wall it cannot get past.
 router.delete("/circles/:id", requireAuth, async (req, res) => {
   const userId = userIdOf(req);
   const circleId = String(req.params.id);
-  const circle = await ownedCircle(userId, circleId);
-  if (!circle) {
-    res.status(404).json({ message: "That group is not on your record." });
+  const result = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
+    const owned = await tx.select().from(circlesTable).where(eq(circlesTable.createdBy, userId)).orderBy(circlesTable.id).for("update");
+    const circle = owned.find((item) => item.id === circleId);
+    if (!circle) return { error: "That group is not on your record.", status: 404 as const };
+    if (owned.length <= 1) return { error: "Keep at least one circle — create another group before deleting this one.", status: 409 as const };
+    if (circle.membersList?.some((member) => member.id !== userId)) {
+      return { error: "This circle has membership history and cannot be deleted.", status: 409 as const };
+    }
+    const history = await tx.execute(sql`SELECT EXISTS (
+      SELECT 1 FROM contributions WHERE circle_id = ${circleId}
+      UNION ALL SELECT 1 FROM loans WHERE circle_id = ${circleId}
+      UNION ALL SELECT 1 FROM savings_goals WHERE circle_id = ${circleId}
+      UNION ALL SELECT 1 FROM circle_meetings WHERE circle_id = ${circleId}
+      UNION ALL SELECT 1 FROM circle_proposals WHERE circle_id = ${circleId}
+    ) AS present`);
+    if (history.rows[0]?.present) return { error: "Only an empty circle can be deleted. Its financial and activity history must be preserved.", status: 409 as const };
+    await tx.delete(circlesTable).where(eq(circlesTable.id, circleId));
+    return { ok: true as const };
+  });
+  if ("error" in result) {
+    res.status(result.status ?? 400).json({ message: result.error });
     return;
   }
-
-  const db = getDb();
-  const owned = await db
-    .select({ id: circlesTable.id })
-    .from(circlesTable)
-    .where(eq(circlesTable.createdBy, userId));
-  if (owned.length <= 1) {
-    res.status(409).json({
-      message: "Keep at least one circle — create another group before deleting this one.",
-    });
-    return;
-  }
-
-  // No foreign keys hold these rows together, so each child is removed explicitly,
-  // in the same request. Loans are matched by circle and owner, so deleting a group
-  // can never take another account's loan with it.
-  await db.delete(contributionsTable).where(eq(contributionsTable.circleId, circleId));
-  await db.delete(loansTable).where(and(eq(loansTable.circleId, circleId), eq(loansTable.userId, userId)));
-  await db.delete(circlesTable).where(and(eq(circlesTable.id, circleId), eq(circlesTable.createdBy, userId)));
   res.json(await publishState(userId));
 });
 
@@ -637,8 +663,8 @@ router.post("/loans", requireAuth, async (req, res) => {
   const amount = Number(req.body?.amount);
   const purpose = String(req.body?.purpose ?? "").trim().slice(0, 120);
   const circleId = String(req.body?.circleId ?? "").slice(0, 80);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    res.status(400).json({ message: "Enter a valid loan amount." });
+  if (!Number.isInteger(amount) || amount <= 0) {
+    res.status(400).json({ message: "Enter a whole loan amount above zero." });
     return;
   }
   if (tooMuchMoney(amount)) {
@@ -672,6 +698,7 @@ router.post("/loans", requireAuth, async (req, res) => {
   // pending check below reliably stop a fast double submit on another device too.
   const db = getDb();
   const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const [circle] = await tx
       .select()
       .from(circlesTable)
@@ -685,11 +712,26 @@ router.post("/loans", requireAuth, async (req, res) => {
       return { error: "Join this circle before applying for one of its loans.", status: 403 as const };
     }
     if (applicationKey) {
-      const [sameRequest] = await tx.select({ id: loansTable.id, userId: loansTable.userId, circleId: loansTable.circleId })
+      const [sameRequest] = await tx.select({
+        id: loansTable.id,
+        userId: loansTable.userId,
+        circleId: loansTable.circleId,
+        requestedPrincipal: loansTable.requestedPrincipal,
+        requestedMonths: loansTable.requestedMonths,
+        purpose: loansTable.purpose,
+      })
         .from(loansTable).where(eq(loansTable.applicationKey, applicationKey)).limit(1);
       if (sameRequest) {
-        if (sameRequest.userId === userId && sameRequest.circleId === circleId) return { ok: true as const };
-        return { error: "That application reference has already been used.", status: 409 as const };
+        // A replay of the same application is a no-op; reusing the key with different
+        // terms would silently answer a question the member never asked.
+        if (
+          sameRequest.userId === userId &&
+          sameRequest.circleId === circleId &&
+          sameRequest.requestedPrincipal === Math.round(amount) &&
+          sameRequest.requestedMonths === preferredMonths &&
+          sameRequest.purpose === purpose
+        ) return { ok: true as const };
+        return { error: "That application reference was already used for different loan terms.", status: 409 as const };
       }
     }
     const [existing] = await tx
@@ -718,12 +760,6 @@ router.post("/loans", requireAuth, async (req, res) => {
       return { error: "Those terms exceed the amount the ledger can safely record. Reduce the loan amount, interest rate, or repayment period.", status: 400 as const };
     }
     const due = dueAfterMonths(quote.months);
-    // A member who manages this circle on its own roster does not have to find a second
-    // signature for their own request — the circle already trusts them to decide on
-    // other people's. The answer comes from the circle row this transaction locked,
-    // never from a role, status or approval the caller typed into the body.
-    const decidesAlone = canManageCircle(circle, userId);
-    const reviewedAt = new Date();
     const [createdLoan] = await tx.insert(loansTable).values({
       id: newId("loan"),
       userId,
@@ -740,11 +776,9 @@ router.post("/loans", requireAuth, async (req, res) => {
       dueDate: formatDay(due),
       dueOn: isoDay(due),
       purpose,
-      // Someone who is not a manager of the circle always waits for a second person to
-      // approve them; their request moves no money until that decision is recorded.
-      status: decidesAlone ? "Active" : "Pending",
-      reviewedBy: decidesAlone ? userId : null,
-      reviewedAt: decidesAlone ? reviewedAt : null,
+      status: "Pending",
+      reviewedBy: null,
+      reviewedAt: null,
       applicationKey: applicationKey || null,
     }).onConflictDoNothing().returning();
     if (!createdLoan) {
@@ -754,10 +788,6 @@ router.post("/loans", requireAuth, async (req, res) => {
       if (existingKey?.userId === userId && existingKey.circleId === circleId) return { ok: true as const };
       return { error: "That application reference has already been used.", status: 409 as const };
     }
-    // An approved request and the cash it handed over are one decision: both are written
-    // inside this transaction, so the loan can never be Active without its payout, and
-    // the payout id is built from the loan id, so it cannot be written twice.
-    if (decidesAlone) await recordLoanDisbursement(createdLoan, "Just now", tx, { recordedBy: userId });
     return {
       ok: true as const,
       loanId: createdLoan.id,
@@ -790,18 +820,6 @@ router.post("/loans", requireAuth, async (req, res) => {
       link: "/loans",
       entityId: result.loanId,
       dedupeKey: `loan-application:${result.loanId}`,
-    });
-  }
-  if (result.loanStatus === "Active" && result.circle && result.loanId) {
-    await notify({
-      userId,
-      circleId: result.circle.id,
-      type: "loan_approved",
-      title: `Loan approved by ${result.circle.name}`,
-      body: `${kes(result.principal ?? 0)} for "${result.purpose}" was paid out on the terms you applied with: ${result.months} months at ${result.interestRate}% ${result.interestPeriod === "Year" ? "a year" : "a month"}. ${kes(result.totalPayable ?? 0)} is repayable in total.`,
-      link: "/loans",
-      entityId: result.loanId,
-      dedupeKey: `loan-approved:${result.loanId}`,
     });
   }
   res.status(201).json(await publishState(userId));
@@ -838,6 +856,7 @@ router.post("/loans/:id/repay", requireAuth, async (req, res) => {
   // Only the borrower repays a loan; circle admins can approve it but cannot edit
   // the borrower's repayment balance.
   const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const [loan] = await tx.select().from(loansTable).where(eq(loansTable.id, loanId)).for("update").limit(1);
     if (!loan || loan.userId !== userId) return { error: "That loan is not on your record.", status: 404 as const };
     const [existingPayment] = await tx.select().from(contributionsTable).where(eq(contributionsTable.id, repaymentEntryId)).limit(1);
@@ -917,6 +936,7 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
     return;
   }
   const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const loanIdRow = await tx.select({ circleId: loansTable.circleId }).from(loansTable).where(eq(loansTable.id, loanId)).limit(1);
     if (!loanIdRow[0]) return { error: "That loan could not be found.", status: 404 as const };
     if (!loanIdRow[0].circleId) return { error: "A loan request must belong to a circle before it can be approved.", status: 403 as const };
@@ -924,6 +944,7 @@ router.post("/loans/:id/approve", requireAuth, async (req, res) => {
     if (!circle || !canManageCircle(circle, userId)) return { error: "Only this circle's admin can approve its loan requests.", status: 403 as const };
     const [loan] = await tx.select().from(loansTable).where(eq(loansTable.id, loanId)).for("update").limit(1);
     if (!loan) return { error: "That loan could not be found.", status: 404 as const };
+    if (loan.userId === userId) return { error: "You cannot approve your own loan. Another circle admin must review it.", status: 403 as const };
     if (loan.status !== "Pending") return { error: "This loan request has already been decided.", status: 409 as const };
     const cash = await circleCash(circle.id, tx);
     if (amount > cash) return { error: `The group holds ${kes(cash)}, which is less than the ${kes(amount)} this loan would hand over.`, status: 400 as const };
@@ -971,6 +992,7 @@ router.post("/loans/:id/reject", requireAuth, async (req, res) => {
     return;
   }
   const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('turiwa.session_token', ${(req as AuthedRequest).sessionToken!}, true)`);
     const [loanRef] = await tx.select({ circleId: loansTable.circleId }).from(loansTable).where(eq(loansTable.id, loanId)).limit(1);
     if (!loanRef) return { error: "That loan request could not be found.", status: 404 as const };
     if (!loanRef.circleId) return { error: "Only a circle admin can reject a group loan request.", status: 403 as const };

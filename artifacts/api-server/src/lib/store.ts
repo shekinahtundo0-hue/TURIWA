@@ -55,10 +55,15 @@ export const entryDelta = (type: LedgerType) => (isOutflow(type) || isSetAside(t
  *  only their phone believes. */
 export async function circleCash(circleId: string, executor: Pick<ReturnType<typeof getDb>, "select"> = getDb()): Promise<number> {
   const rows = await executor
-    .select({ amount: contributionsTable.amount, type: contributionsTable.type })
+    .select({ amount: contributionsTable.amount, type: contributionsTable.type, status: contributionsTable.status })
     .from(contributionsTable)
     .where(eq(contributionsTable.circleId, circleId));
-  return rows.reduce((sum, row) => sum + entryDelta(asLedgerType(row.type)) * row.amount, 0);
+  return rows.reduce((sum, row) => {
+    // Only settled rows describe cash the group actually holds, and an unknown type
+    // is not quietly counted as a contribution.
+    if (row.status !== "Complete" || !LEDGER_TYPES.includes(row.type as LedgerType)) return sum;
+    return sum + entryDelta(row.type as LedgerType) * row.amount;
+  }, 0);
 }
 
 export type RosterEntry = {
@@ -193,7 +198,13 @@ function asLoanStatus(value: string): "Active" | "Pending" | "Paid off" | "Rejec
 
 // Who a ledger row belongs to. An entry follows the member it names; only when it
 // names nobody does the account that recorded it own the row.
-function attributedMemberId(circle: Circle | undefined, item: { member: string | null; userId: string | null }): string | null {
+function attributedMemberId(
+  circle: Circle | undefined,
+  item: { member: string | null; userId: string | null; recordedBy?: string | null },
+): string | null {
+  // Rows written since attribution became explicit carry the member's immutable id
+  // and a separate recorder. A mutable display name can never outvote that id.
+  if (item.recordedBy) return item.userId ?? null;
   const named = (item.member ?? "").trim().toLowerCase();
   const listed = named
     ? circle?.membersList?.find((member) => member.name.trim().toLowerCase() === named)
@@ -389,6 +400,7 @@ export async function getState(userId: string): Promise<AppState> {
       status: asContributionStatus(item.status),
       type: asLedgerType(item.type),
       member: item.member ?? null,
+      attributedMemberId: attributedMemberId(circlesById.get(item.circleId), item),
       loanId: item.loanId ?? null,
       // Who typed the entry, and how they say the money arrived. Empty on every row
       // written before these were recorded, which the screens show as nothing rather

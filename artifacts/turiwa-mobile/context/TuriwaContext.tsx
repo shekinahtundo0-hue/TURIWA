@@ -2,9 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '@/lib/api';
 import { LOAN_MONTHS } from '@/lib/loanMath';
-import type { AppNotification, AuthUser, Circle, CircleMember, CircleRole, Contribution, GroupDraft, LedgerEntry, LedgerType, Loan, NotificationPreferencePatch, NotificationPreferenceRow } from '@/lib/api';
+import type { AppNotification, AuthUser, Circle, CircleMember, CircleRole, Contribution, ContributionMetadata, GroupDraft, LedgerEntry, LedgerType, Loan, NotificationPreferencePatch, NotificationPreferenceRow } from '@/lib/api';
 
-export type { AppNotification, AuthUser, Circle, CircleMember, CircleRole, Contribution, GroupDraft, LedgerEntry, LedgerType, Loan, NotificationPreferencePatch, NotificationPreferenceRow };
+export type { AppNotification, AuthUser, Circle, CircleMember, CircleRole, Contribution, ContributionMetadata, GroupDraft, LedgerEntry, LedgerType, Loan, NotificationPreferencePatch, NotificationPreferenceRow };
 
 type StoredAuth = {
   signedIn?: boolean;
@@ -112,7 +112,7 @@ type TuriwaContextValue = {
   liveError: string;
   refreshing: boolean;
   refresh: () => Promise<void>;
-  addContribution: (amount: number, note: string, circleId?: string, entry?: LedgerEntry) => Promise<void>;
+  addContribution: (amount: number, note: string, circleId?: string, entry?: LedgerEntry, metadata?: ContributionMetadata) => Promise<void>;
   createCircle: (draft: GroupDraft) => Promise<void>;
   joinCircle: (code: string) => Promise<void>;
   deleteCircle: (circleId: string) => Promise<void>;
@@ -127,7 +127,7 @@ type TuriwaContextValue = {
   transferPrimaryAdmin: (circleId: string, memberId: string) => Promise<void>;
   signIn: (phone: string, password: string) => Promise<void>;
   signInWithGoogle: (idToken: string) => Promise<void>;
-  createAccount: (name: string, phone: string, password: string) => Promise<void>;
+  createAccount: (name: string, phone: string, password: string, verificationToken: string, signal?: AbortSignal) => Promise<void>;
   signOut: () => Promise<void>;
   updateProfileName: (name: string) => Promise<void>;
   activateTwoFactor: (code: string) => Promise<string[]>;
@@ -138,6 +138,17 @@ type TuriwaContextValue = {
 };
 
 const AUTH_KEY = '@turiwa/auth';
+
+type SessionScope = { generation: number; token: string | null; user: AuthUser | null; stateReceived?: boolean };
+
+// Storage writes cannot be cancelled once dispatched. Serialise them so a logout,
+// account deletion or newer session is always written after an older in-flight write.
+let storageWrites: Promise<void> = Promise.resolve();
+function writeStorage(write: () => Promise<void>): Promise<void> {
+  const next = storageWrites.then(write);
+  storageWrites = next.catch(() => {});
+  return next;
+}
 
 function cacheKey(userId: string, name: 'circles' | 'contributions' | 'loans' | 'active-circle') {
   return `@turiwa/${userId}/${name}`;
@@ -239,9 +250,10 @@ function normalizeCircle(raw: Partial<Circle> & { monthly?: number }, user: Auth
 // rather than being guessed into the current month or crashing the screen.
 function normalizeContribution(raw: Partial<Contribution>): Contribution {
   return {
+    // Preserve unknown/missing kinds, never invent a Contribution from an old row.
     ...(raw as Contribution),
     createdAt: raw.createdAt ?? '',
-    type: raw.type ?? 'Contribution',
+    attributedMemberId: raw.attributedMemberId ?? null,
   };
 }
 
@@ -276,9 +288,10 @@ function normalizeLoan(loan: Loan): Loan {
 // one circle's rows is what keeps that circle's totals from ever being read as another
 // circle's, and running it over every row is the fund view the statement keeps.
 function buildFinance(circles: Circle[], contributions: Contribution[], loans: Loan[]): Finance {
-  const kind = (item: Contribution) => item.type ?? 'Contribution';
+  const completed = contributions.filter((item) => item.status === 'Complete' && api.LEDGER_TYPES.includes(item.type));
+  const kind = (item: Contribution) => item.type;
   const total = (items: Contribution[]) => items.reduce((sum, item) => sum + item.amount, 0);
-  const ofKind = (test: (type: api.LedgerType) => boolean) => total(contributions.filter((item) => test(kind(item))));
+  const ofKind = (test: (type: api.LedgerType) => boolean) => total(completed.filter((item) => test(kind(item))));
   const contributed = ofKind((type) => type === 'Contribution');
   const repaid = ofKind((type) => type === 'Repayment');
   const fines = ofKind((type) => type === 'Fine');
@@ -302,7 +315,7 @@ function buildFinance(circles: Circle[], contributions: Contribution[], loans: L
     .filter((loan) => loan.status === 'Active')
     .reduce((sum, loan) => sum + loan.balance, 0);
   const byCircle = new Map<string, number>();
-  for (const item of contributions) {
+  for (const item of completed) {
     byCircle.set(item.circleId, (byCircle.get(item.circleId) ?? 0) + api.entryDelta(kind(item)) * item.amount);
   }
   // A row whose group is not in this account's list is still the account's ledger,
@@ -318,7 +331,7 @@ function buildFinance(circles: Circle[], contributions: Contribution[], loans: L
   // instead of picking one and calling it fact.
   const paidByLoan = new Map<string, number>();
   const returnedByLoan = new Map<string, number>();
-  for (const item of contributions) {
+  for (const item of completed) {
     if (!item.loanId) continue;
     const bucket = api.isLentOut(kind(item)) ? paidByLoan : returnedByLoan;
     bucket.set(item.loanId, (bucket.get(item.loanId) ?? 0) + item.amount);
@@ -336,7 +349,7 @@ function buildFinance(circles: Circle[], contributions: Contribution[], loans: L
   // The same receipts, split by group, so "is this group on track" is answered with
   // its own collection rather than the fund's total.
   const inMonth = new Map<string, number>();
-  for (const item of contributions) {
+  for (const item of completed) {
     if (!contributedIn(item)) continue;
     inMonth.set(item.circleId, (inMonth.get(item.circleId) ?? 0) + item.amount);
   }
@@ -416,32 +429,60 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   const userId = user?.id ?? '';
   const profileName = user?.name ?? 'Member';
 
-  const persistAuth = async (next: StoredAuth) => {
-    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+  const mounted = useRef(false);
+  const sessionRef = useRef<SessionScope>({ generation: 0, token: api.getAuthToken(), user: null });
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const authAttempt = useRef(0);
+  const stateRevision = useRef(0);
+  const lastNotificationFetch = useRef(0);
+  // Rendered callbacks keep their original owner; never capture the new account
+  // after awaiting an old account's request.
+  const scope = sessionRef.current;
+  const isCurrent = useCallback((owner: SessionScope) =>
+    mounted.current && owner.generation === sessionRef.current.generation &&
+    owner.token === api.getAuthToken() && owner.user?.id === sessionRef.current.user?.id, []);
+  const hasSession = (owner: SessionScope) => isCurrent(owner) && !!owner.token && !!owner.user?.id;
+
+  const persistAuth = (next: StoredAuth, owner: SessionScope) => writeStorage(async () => {
+    if (isCurrent(owner)) await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+  });
+
+  const runForSession = async <T,>(
+    owner: SessionScope,
+    request: () => Promise<T>,
+    apply?: (result: T) => void | Promise<void>,
+  ): Promise<T | undefined> => {
+    if (!hasSession(owner)) return;
+    try {
+      const result = await request();
+      if (!hasSession(owner)) return;
+      await apply?.(result);
+      return hasSession(owner) ? result : undefined;
+    } catch (err) {
+      if (hasSession(owner)) throw err;
+    }
   };
 
-  // The notification list is a second read beside the state, not part of it. Every
-  // state frame would otherwise carry a person's whole inbox, and the reminder pass
-  // that runs on this call needs a moment of its own. Ten seconds is calm enough
-  // that a group's live chatter does not turn into a request per keystroke.
-  const lastNotificationFetch = useRef(0);
-  const refreshNotifications = useCallback(async (force = false) => {
-    if (!api.getAuthToken()) return;
+  // The inbox and its throttle belong to a session just like the ledger does.
+  const refreshNotificationsFor = useCallback(async (owner: SessionScope, force = false) => {
+    if (!isCurrent(owner) || !owner.token || !owner.user?.id) return;
     const now = Date.now();
     if (!force && now - lastNotificationFetch.current < 10_000) return;
     lastNotificationFetch.current = now;
     try {
       const centre = await api.fetchNotifications();
+      if (!isCurrent(owner)) return;
       setNotifications(centre.notifications);
       setUnreadCount(centre.unreadCount);
       setNotificationPreferences(centre.preferences);
     } catch {
-      // The bell keeps its last known list while the API is unreachable; the next
-      // state frame tries again.
+      // Retain this account's list while offline; stale errors have no side effects.
     }
-  }, []);
+  }, [isCurrent]);
+  const refreshNotifications = (force = false) => refreshNotificationsFor(scope, force);
 
   const markNotificationRead = async (notificationId: string) => {
+    if (!hasSession(scope)) return;
     const target = notifications.find((item) => item.id === notificationId);
     setNotifications((prev) => prev.map((item) => (item.id === notificationId ? { ...item, read: true } : item)));
     if (target && !target.read) setUnreadCount((count) => Math.max(count - 1, 0));
@@ -453,6 +494,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   };
 
   const markAllNotificationsRead = async () => {
+    if (!hasSession(scope)) return;
     setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
     setUnreadCount(0);
     try {
@@ -463,29 +505,40 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   };
 
   const saveNotificationPreferences = async (patch: NotificationPreferencePatch) => {
-    await api.saveNotificationPreferences(patch);
-    await refreshNotifications(true);
+    await runForSession(scope, () => api.saveNotificationPreferences(patch), () => refreshNotificationsFor(scope, true));
   };
 
-  const applyState = async (state: api.AppState) => {
-    const normalizedCircles = state.circles.map((c) => normalizeCircle(c, user));
+  const applyState = async (state: api.AppState, owner: SessionScope) => {
+    if (!hasSession(owner)) return;
+    const id = owner.user!.id;
+    const normalizedCircles = state.circles.map((c) => normalizeCircle(c, owner.user));
     const normalizedLoans = state.loans.map(normalizeLoan);
     const normalizedRows = state.contributions.map(normalizeContribution);
+    owner.stateReceived = true;
+    stateRevision.current += 1;
     setCircles(normalizedCircles);
     setContributions(normalizedRows);
     setLoans(normalizedLoans);
     setLive(true);
     setLiveError('');
-    void refreshNotifications();
-    if (!userId) return;
-    await Promise.all([
-      AsyncStorage.setItem(cacheKey(userId, 'circles'), JSON.stringify(normalizedCircles)),
-      AsyncStorage.setItem(cacheKey(userId, 'contributions'), JSON.stringify(normalizedRows)),
-      AsyncStorage.setItem(cacheKey(userId, 'loans'), JSON.stringify(normalizedLoans)),
-    ]);
+    void refreshNotificationsFor(owner);
+    await writeStorage(async () => {
+      if (!hasSession(owner)) return;
+      await Promise.all([
+        AsyncStorage.setItem(cacheKey(id, 'circles'), JSON.stringify(normalizedCircles)),
+        AsyncStorage.setItem(cacheKey(id, 'contributions'), JSON.stringify(normalizedRows)),
+        AsyncStorage.setItem(cacheKey(id, 'loans'), JSON.stringify(normalizedLoans)),
+      ]);
+    });
+  };
+
+  const mutateState = async (request: () => Promise<api.AppState>) => {
+    await runForSession(scope, request, (state) => applyState(state, scope));
   };
 
   const clearData = () => {
+    stateRevision.current += 1;
+    lastNotificationFetch.current = 0;
     setCircles([]);
     setContributions([]);
     setLoans([]);
@@ -494,20 +547,38 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
     setUnreadCount(0);
     setNotificationPreferences([]);
     setLive(false);
+    setLiveError('');
+    setRefreshing(false);
   };
 
-  const loadCache = async (id: string) => {
+  const replaceSession = (token: string | null, nextUser: AuthUser | null): SessionScope => {
+    const next = { generation: sessionRef.current.generation + 1, token, user: nextUser };
+    sessionRef.current = next;
+    api.setAuthToken(token);
+    clearData();
+    setSessionGeneration(next.generation);
+    setUser(nextUser);
+    setSignedIn(!!token);
+    return next;
+  };
+
+  const loadCache = async (owner: SessionScope) => {
+    if (!hasSession(owner) || owner.stateReceived) return;
+    const id = owner.user!.id;
+    const revision = stateRevision.current;
     const [storedCircles, storedContributions, storedLoans, storedActiveCircle] = await Promise.all([
       AsyncStorage.getItem(cacheKey(id, 'circles')),
       AsyncStorage.getItem(cacheKey(id, 'contributions')),
       AsyncStorage.getItem(cacheKey(id, 'loans')),
       AsyncStorage.getItem(cacheKey(id, 'active-circle')),
     ]);
+    // Neither another account nor a newer network frame can be replaced by this read.
+    if (!hasSession(owner) || revision !== stateRevision.current) return;
     if (storedActiveCircle) setActiveCircleId(storedActiveCircle);
     if (storedCircles) {
       setCircles(
         (JSON.parse(storedCircles) as (Partial<Circle> & { monthly?: number })[]).map((c) =>
-          normalizeCircle(c, user),
+          normalizeCircle(c, owner.user),
         ),
       );
     }
@@ -519,16 +590,21 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    mounted.current = true;
+    let owner = sessionRef.current;
+    const current = () => active && isCurrent(owner);
     AsyncStorage.getItem(AUTH_KEY).then(async (storedAuth) => {
-      await Promise.all(LEGACY_CACHE_KEYS.map((key) => AsyncStorage.removeItem(key)));
-      if (!active) return;
+      if (!current()) return;
+      await writeStorage(async () => {
+        if (current()) await Promise.all(LEGACY_CACHE_KEYS.map((key) => AsyncStorage.removeItem(key)));
+      });
+      if (!current()) return;
 
       const auth = storedAuth ? (JSON.parse(storedAuth) as StoredAuth) : null;
       if (auth?.token) {
-        api.setAuthToken(auth.token);
-        setSignedIn(true);
-        if (auth.user) setUser(auth.user);
-        if (auth.user?.id) await loadCache(auth.user.id);
+        owner = replaceSession(auth.token, auth.user ?? null);
+        await loadCache(owner);
+        if (!current()) return;
       } else if (auth?.name) {
         setUser({ id: '', name: auth.name, phone: null, email: null, hasPassword: true, twoFactorEnabled: false, twoFactorPending: false, backupCodesLeft: 0, createdAt: '' });
       }
@@ -537,205 +613,258 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       if (auth?.token) {
         try {
           const result = await withTimeout(api.fetchMe(), 3500);
-          if (!active) return;
+          if (!current()) return;
           if (result) {
-            setUser(result.user);
-            await persistAuth({ signedIn: true, token: auth.token, user: result.user });
+            if (owner.user?.id !== result.user.id) {
+              owner = replaceSession(auth.token, result.user);
+              await loadCache(owner);
+              if (!current()) return;
+            } else {
+              owner.user = result.user;
+              setUser(result.user);
+            }
+            await persistAuth({ signedIn: true, token: owner.token, user: result.user }, owner);
           }
         } catch (err) {
-          if (!active) return;
+          if (!current()) return;
           if (err instanceof api.ApiError && err.status === 401) {
-            api.setAuthToken(null);
-            setSignedIn(false);
-            setUser(null);
-            clearData();
-            await persistAuth({ signedIn: false });
+            owner = replaceSession(null, null);
+            await persistAuth({ signedIn: false }, owner);
           }
         }
       }
-      if (active) setAuthHydrated(true);
+      if (current()) setAuthHydrated(true);
     }).catch(() => {
+      if (!current()) return;
       setHydrated(true);
       setAuthHydrated(true);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      mounted.current = false;
+      authAttempt.current += 1;
+      sessionRef.current = { ...sessionRef.current, generation: sessionRef.current.generation + 1 };
+    };
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
-    return api.subscribeToState(
-      (state) => {
-        void applyState(state);
-      },
-      (err) => {
+    if (!hydrated || !authHydrated || !signedIn || !hasSession(scope)) return;
+    let active = true;
+    const onError = (err: unknown) => {
+      if (active && isCurrent(scope)) {
         setLiveError(err instanceof Error ? err.message : 'The Turiwa API did not answer.');
+      }
+    };
+    const unsubscribe = api.subscribeToState(
+      (state) => {
+        if (active && isCurrent(scope)) void applyState(state, scope).catch(onError);
       },
+      onError,
     );
-  }, [hydrated, signedIn, userId]);
+    return () => { active = false; unsubscribe(); };
+  }, [hydrated, authHydrated, signedIn, sessionGeneration]);
 
   const refresh = async () => {
+    if (!hasSession(scope)) return;
     setRefreshing(true);
     try {
-      const state = await api.fetchState();
-      if (state) await applyState(state);
+      await runForSession(scope, api.fetchState, (state) => applyState(state, scope));
     } catch {
       // offline cache retained
     } finally {
-      setRefreshing(false);
+      if (hasSession(scope)) setRefreshing(false);
     }
   };
 
-  const addContribution = async (amount: number, note: string, circleId?: string, entry?: LedgerEntry) => {
-    // Whoever records a ledger entry is paying into the group as themselves, so an
-    // entry with no chosen member is attributed to this account rather than to a
-    // made-up name.
-    const member = entry?.member ?? user?.name?.trim() ?? 'You';
-    const payload: LedgerEntry = entry ? { ...entry, member } : { type: 'Contribution', member };
+  const addContribution = async (amount: number, note: string, circleId?: string, entry?: LedgerEntry, metadata?: ContributionMetadata) => {
+    // A null member means the row is not attributed to a person (a manager chose
+    // Circle General). Replacing it with the recorder's name would turn group
+    // spending into the treasurer's personal contribution.
     // With no group named on the sheet the money goes to the circle the person is
     // working in, not to whichever the list happens to start with: the first circle is
     // not the one on screen after a switch.
-    await applyState(await api.addContribution(amount, note, circleId ?? activeCircle?.id ?? circles[0]?.id, payload));
+    await mutateState(() => api.addContribution(
+      amount,
+      note,
+      circleId ?? activeCircle?.id ?? circles[0]?.id,
+      entry ?? { type: 'Contribution', member: null },
+      metadata,
+    ));
   };
 
   const createCircle = async (draft: GroupDraft) => {
-    const res = await api.createCircle(draft);
-    await applyState(res);
+    await mutateState(() => api.createCircle(draft));
   };
 
   const joinCircle = async (code: string) => {
-    await applyState(await api.joinCircle(code));
+    await mutateState(() => api.joinCircle(code));
   };
 
   // The API answers with the state after the group and its ledger are gone, so the
   // screens drop the closed group from the same response that removed it.
   const deleteCircle = async (circleId: string) => {
-    await applyState(await api.deleteCircle(circleId));
+    await mutateState(() => api.deleteCircle(circleId));
   };
 
   // The fine rule and the fines themselves are written by the API, so the screens
   // show the group's record rather than a local guess that the next poll replaces.
   const setCircleFine = async (circleId: string, lateFine: number) => {
-    await applyState(await api.setCircleFine(circleId, lateFine));
+    await mutateState(() => api.setCircleFine(circleId, lateFine));
   };
 
   const applyFine = async (circleId: string, memberId: string) => {
-    await applyState(await api.applyFine(circleId, memberId));
+    await mutateState(() => api.applyFine(circleId, memberId));
   };
 
   const applyForLoan = async (amount: number, purpose: string, circleId: string, preferredMonths: number, applicationKey?: string) => {
-    await applyState(await api.applyForLoan(amount, purpose, circleId, preferredMonths, applicationKey));
+    await mutateState(() => api.applyForLoan(amount, purpose, circleId, preferredMonths, applicationKey));
   };
 
   const repayLoan = async (amount: number, loanId?: string, idempotencyKey?: string, audit?: { method?: string; reference?: string }) => {
+    if (!hasSession(scope)) return;
     if (!loanId) throw new Error('Choose the loan you are repaying and try again.');
     const target = loans.find((loan) => loan.id === loanId);
     if (!target || target.status !== 'Active') throw new Error('This loan is no longer active. Refresh the loan list and try again.');
-    await applyState(await api.repayLoan(target.id, amount, idempotencyKey, audit));
+    await mutateState(() => api.repayLoan(target.id, amount, idempotencyKey, audit));
   };
 
   // Administrator approval of pending loans. The server's answer is the state: a
   // loan that was not approved must not look approved on screen.
   const approveLoan = async (loanId: string, terms: { amount: number; months: number; interestRate: number }) => {
-    await applyState(await api.approveLoan(loanId, terms));
+    await mutateState(() => api.approveLoan(loanId, terms));
   };
 
   const rejectLoan = async (loanId: string, reason: string) => {
-    await applyState(await api.rejectLoan(loanId, reason));
+    await mutateState(() => api.rejectLoan(loanId, reason));
   };
 
   const removeCircleMember = async (circleId: string, memberId: string) => {
-    await applyState(await api.removeCircleMember(circleId, memberId));
+    await mutateState(() => api.removeCircleMember(circleId, memberId));
   };
 
   const setCircleMemberRole = async (circleId: string, memberId: string, role: 'member' | 'co-admin') => {
-    await applyState(await api.setCircleMemberRole(circleId, memberId, role));
+    await mutateState(() => api.setCircleMemberRole(circleId, memberId, role));
   };
 
   const transferPrimaryAdmin = async (circleId: string, memberId: string) => {
-    await applyState(await api.transferPrimaryAdmin(circleId, memberId));
+    await mutateState(() => api.transferPrimaryAdmin(circleId, memberId));
   };
 
   const openSession = async (session: api.AuthSession) => {
-    api.setAuthToken(session.token);
-    clearData();
-    setUser(session.user);
-    setSignedIn(true);
-    await persistAuth({ signedIn: true, token: session.token, user: session.user });
-    await loadCache(session.user.id);
-    void refreshNotifications(true);
+    const owner = replaceSession(session.token, session.user);
+    setHydrated(true);
+    setAuthHydrated(true);
+    await runForSession(owner, async () => {
+      await persistAuth({ signedIn: true, token: owner.token, user: session.user }, owner);
+      await loadCache(owner);
+      void refreshNotificationsFor(owner, true);
+    });
+  };
+
+  const authenticate = async (request: () => Promise<api.AuthSession>, signal?: AbortSignal) => {
+    const owner = sessionRef.current;
+    const attempt = ++authAttempt.current;
+    const current = () => isCurrent(owner) && attempt === authAttempt.current && !signal?.aborted;
+    if (!current()) return;
+    let session: api.AuthSession;
+    try {
+      session = await request();
+    } catch (err) {
+      if (current()) throw err;
+      return;
+    }
+    if (current()) await openSession(session);
   };
 
   const signIn = async (phone: string, password: string) => {
-    await openSession(await api.signIn(phone, password));
+    await authenticate(() => api.signIn(phone, password));
   };
 
   const signInWithGoogle = async (idToken: string) => {
-    await openSession(await api.signInWithGoogle(idToken));
+    await authenticate(() => api.signInWithGoogle(idToken));
   };
 
-  const createAccount = async (name: string, phone: string, password: string) => {
-    await openSession(await api.signUp(name, phone, password));
+  const createAccount = async (name: string, phone: string, password: string, verificationToken: string, signal?: AbortSignal) => {
+    if (!verificationToken) throw new Error('Verify your phone number before creating your account.');
+    await authenticate(() => api.signUp(name, phone, password, verificationToken), signal);
   };
 
   const signOut = async () => {
-    await api.signOut();
-    api.setAuthToken(null);
-    setSignedIn(false);
-    setUser(null);
-    clearData();
-    await persistAuth({ signedIn: false });
+    // Dispatch with the departing token, but invalidate local work immediately,
+    // not after a slow or unreachable server has answered.
+    if (!isCurrent(scope)) return;
+    const signingOut = api.signOut();
+    authAttempt.current += 1;
+    const owner = replaceSession(null, null);
+    setHydrated(true);
+    setAuthHydrated(true);
+    try {
+      await Promise.all([signingOut, persistAuth({ signedIn: false }, owner)]);
+    } catch (err) {
+      if (isCurrent(owner)) throw err;
+    }
+  };
+
+  // Auth-user responses must match both the session and the account they update.
+  const persistUser = async (next: AuthUser, owner: SessionScope) => {
+    if (!hasSession(owner) || next.id !== owner.user?.id) return;
+    owner.user = next;
+    setUser(next);
+    await persistAuth({ signedIn: true, token: owner.token, user: next }, owner);
   };
 
   const updateProfileName = async (name: string) => {
-    const { user: updated } = await api.updateName(name);
-    const token = api.getAuthToken();
-    setUser(updated);
-    await persistAuth({ signedIn: true, token, user: updated });
-  };
-
-  // Auth-user fields such as two-factor state come straight from the API, so the
-  // stored copy is replaced rather than patched locally.
-  const persistUser = async (next: AuthUser) => {
-    setUser(next);
-    await persistAuth({ signedIn: true, token: api.getAuthToken(), user: next });
-    return next;
+    await runForSession(scope, () => api.updateName(name), (result) => persistUser(result.user, scope));
   };
 
   const activateTwoFactor = async (code: string) => {
-    const result = await api.activateTwoFactor(code);
-    await persistUser(result.user);
-    return result.backupCodes;
+    const result = await runForSession(scope, () => api.activateTwoFactor(code), (value) => persistUser(value.user, scope));
+    return result?.backupCodes ?? [];
   };
 
   const disableTwoFactor = async (code: string, password?: string) => {
-    const result = await api.disableTwoFactor(code, password);
-    await persistUser(result.user);
+    await runForSession(scope, () => api.disableTwoFactor(code, password), (result) => persistUser(result.user, scope));
   };
 
   const deleteAccount = async (password: string, code: string) => {
-    const deletedUserId = userId;
-    await api.deleteAccount(password, code);
-    api.setAuthToken(null);
-    setSignedIn(false);
-    setUser(null);
-    clearData();
-    await persistAuth({ signedIn: false });
-    if (deletedUserId) {
-      await Promise.all(
-        (['circles', 'contributions', 'loans', 'active-circle'] as const).map((name) =>
-          AsyncStorage.removeItem(cacheKey(deletedUserId, name)),
-        ),
-      );
+    if (!hasSession(scope)) return;
+    const deletedUserId = scope.user!.id;
+    try {
+      await api.deleteAccount(password, code);
+    } catch (err) {
+      if (hasSession(scope)) throw err;
+      return;
+    }
+    // A late deletion response must not sign out the next account. Cache removal
+    // still belongs to the deleted id, queued behind its already dispatched writes.
+    let signedOutOwner: SessionScope | undefined;
+    if (hasSession(scope)) {
+      authAttempt.current += 1;
+      signedOutOwner = replaceSession(null, null);
+    }
+    try {
+      await writeStorage(async () => {
+        if (signedOutOwner && isCurrent(signedOutOwner)) {
+          await AsyncStorage.setItem(AUTH_KEY, JSON.stringify({ signedIn: false }));
+        }
+        await Promise.all(
+          (['circles', 'contributions', 'loans', 'active-circle'] as const).map((name) =>
+            AsyncStorage.removeItem(cacheKey(deletedUserId, name)),
+          ),
+        );
+      });
+    } catch (err) {
+      if (signedOutOwner && isCurrent(signedOutOwner)) throw err;
     }
   };
 
   const nextStopAfterAuth = async () => {
-    if (!api.getAuthToken()) return '/(tabs)' as const;
+    // Called by the pre-login render after authentication has completed.
+    const owner = sessionRef.current;
     try {
-      const state = await api.fetchState();
-      // A member who joined somebody else's circle has a circle on their record, so they
-      // belong in the app. Only an account with none at all needs the create-or-join step.
-      return state.circles.length > 0 ? ('/(tabs)' as const) : ('/(onboarding)/create-group' as const);
+      const state = await runForSession(owner, api.fetchState);
+      // Only the still-current account with no circles needs create-or-join.
+      return state && state.circles.length === 0 ? ('/(onboarding)/create-group' as const) : ('/(tabs)' as const);
     } catch {
       return '/(tabs)' as const;
     }
@@ -755,12 +884,20 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   // URL, the console or a request body selects nothing here — and the API scopes every
   // read to the caller's own memberships regardless.
   const setActiveCircle = async (circleId: string) => {
+    if (!hasSession(scope)) return false;
     const target = circles.find((circle) => circle.id === circleId);
     const access = target ? circleAccess(target, userId) : null;
     if (!target || !access || access.status !== 'active') return false;
+    stateRevision.current += 1;
     setActiveCircleId(circleId);
-    if (userId) await AsyncStorage.setItem(cacheKey(userId, 'active-circle'), circleId);
-    return true;
+    try {
+      await writeStorage(async () => {
+        if (hasSession(scope)) await AsyncStorage.setItem(cacheKey(userId, 'active-circle'), circleId);
+      });
+    } catch (err) {
+      if (hasSession(scope)) throw err;
+    }
+    return hasSession(scope);
   };
 
   // The stored choice of circle is a hint about where the person was last working,
@@ -768,12 +905,14 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
   // it, so a group that was deleted, or one whose membership has since gone, cannot
   // stay the active one: the app moves to another circle the API still returns.
   useEffect(() => {
-    if (!userId) return;
+    if (!hasSession(scope)) return;
     if (circles.some((circle) => circle.id === activeCircleId)) return;
     const next = circles[0]?.id ?? '';
     if (next !== activeCircleId) setActiveCircleId(next);
-    if (next) void AsyncStorage.setItem(cacheKey(userId, 'active-circle'), next);
-  }, [circles, userId, activeCircleId]);
+    if (next) void writeStorage(async () => {
+      if (hasSession(scope)) await AsyncStorage.setItem(cacheKey(userId, 'active-circle'), next);
+    }).catch(() => { /* The stored selection is only a hint. */ });
+  }, [circles, userId, activeCircleId, sessionGeneration]);
 
   const finance = useMemo(() => buildFinance(circles, contributions, loans), [circles, contributions, loans]);
 
@@ -865,6 +1004,7 @@ export function TuriwaProvider({ children }: { children: React.ReactNode }) {
       notificationPreferences,
       authHydrated,
       signedIn,
+      sessionGeneration,
       profileName,
       user,
       live,

@@ -26,6 +26,7 @@ export default function ReportsScreen() {
   const layout = useResponsive();
   const onBack = useSubScreenBack();
   const [data, setData] = useState<Report[] | null>(null);
+  const [error, setError] = useState('');
 
   // The same rights the API enforces: only an admin or co-admin of a circle can
   // read its summary, so the list is filtered before the calls go out.
@@ -36,14 +37,18 @@ export default function ReportsScreen() {
   );
 
   const load = useCallback(async () => {
+    setError('');
     if (manageable.length === 0) {
       setData([]);
       return;
     }
+    setData(null);
     try {
       setData(await Promise.all(manageable.map((circle) => api.getFinancialReport(circle.id))));
-    } catch {
-      setData([]);
+    } catch (err) {
+      // An unreadable report is not an empty one: say the figures could not be
+      // fetched so nobody mistakes a failed request for a circle with no money.
+      setError(err instanceof Error ? err.message : 'Could not load the reports.');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circles, user?.id]);
@@ -56,7 +61,9 @@ export default function ReportsScreen() {
     <AppChrome>
       <Screen>
         <BrandHeader onBack={onBack} title="Financial reports" subtitle="Recorded ledger activity by circle. Estimates are not included." />
-        {data === null ? (
+        {error ? (
+          <EmptyState icon="alert-circle" title="Reports could not load" body={error} actionLabel="Try again" onAction={() => void load()} />
+        ) : data === null ? (
           <SkeletonRows rows={3} />
         ) : data.length === 0 ? (
           <EmptyState

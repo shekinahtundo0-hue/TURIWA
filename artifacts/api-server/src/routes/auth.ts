@@ -256,38 +256,45 @@ router.post("/sign-up", async (req, res) => {
   const name = String(req.body?.name ?? "").trim();
   const phone = normalizePhone(String(req.body?.phone ?? ""));
   const password = String(req.body?.password ?? "");
+  const verificationToken = req.body?.verificationToken;
   if (!name || phone.replace(/\D/g, "").length < 9 || password.length < MIN_PASSWORD) {
     res.status(400).json({ message: `Name, phone, and a password of at least ${MIN_PASSWORD} characters are required.` });
     return;
   }
+  const proofRequired = "Confirm the code we texted to " + phone + " before creating your account.";
+  if (typeof verificationToken !== "string" || !/^[a-f0-9]{64}$/.test(verificationToken)) {
+    res.status(400).json({ message: proofRequired });
+    return;
+  }
 
   const db = getDb();
-  const existing = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
-  if (existing.length > 0) {
+  const passwordHash = hashPassword(password);
+  const result = await db.transaction(async (tx) => {
+    const existing = await tx.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
+    if (existing.length > 0) return { status: "exists" } as const;
+    // Proof and account creation commit together. Neither a global verified flag
+    // nor the old numeric OTP can authorize another caller to claim this phone.
+    if (!(await spendVerifiedCode(phone, "signup", verificationToken, tx))) {
+      return { status: "unverified" } as const;
+    }
+    const [user] = await tx.insert(usersTable).values({
+      id: newId("user"),
+      name,
+      phone,
+      passwordHash,
+    }).returning();
+    return { status: "created", user } as const;
+  });
+  if (result.status === "exists") {
     res.status(409).json({ message: "An account with that phone number already exists. Sign in instead." });
     return;
   }
-
-  // An account is a claim on a phone number, so the claim has to arrive with proof
-  // that the number's owner read the code — otherwise anyone could open a Turiwa as
-  // somebody else and be sitting inside their groups before the real owner signs up.
-  if (!(await spendVerifiedCode(phone, "signup"))) {
-    res.status(400).json({
-      message: "Confirm the code we texted to " + phone + " before creating your account.",
-    });
+  if (result.status === "unverified") {
+    res.status(400).json({ message: proofRequired });
     return;
   }
-
-  const id = newId("user");
-  await db.insert(usersTable).values({
-    id,
-    name,
-    phone,
-    passwordHash: hashPassword(password),
-  });
-  const token = await createSession(id);
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
-  res.status(201).json({ user: publicUser(user), token });
+  const token = await createSession(result.user.id);
+  res.status(201).json({ user: publicUser(result.user), token });
 });
 
 router.post("/sign-in", async (req, res) => {
@@ -345,17 +352,22 @@ router.post("/otp", async (req, res) => {
     res.status(503).json({ message: CODE_NOT_DELIVERED });
     return;
   }
+  if (code === null) {
+    res.status(409).json({ message: "This code was already confirmed. Continue signing up, or wait a minute before requesting a new code." });
+    return;
+  }
   res.status(201).json({ code, expiresInMinutes: 10, testCode: true });
 });
 
 router.post("/otp/verify", async (req, res) => {
   const phone = normalizePhone(String(req.body?.phone ?? ""));
   const code = String(req.body?.code ?? "").trim();
-  if (!await markCodeVerified(phone, "signup", code)) {
+  const verificationToken = await markCodeVerified(phone, "signup", code);
+  if (!verificationToken) {
     res.status(400).json({ message: "Kanuni si sahihi. Check the code and try again." });
     return;
   }
-  res.json({ ok: true });
+  res.json({ ok: true, verificationToken });
 });
 
 router.post("/password/reset-code", async (req, res) => {
@@ -386,18 +398,24 @@ router.post("/password/reset", async (req, res) => {
     return;
   }
   const db = getDb();
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
-  if (!user) {
+  const passwordHash = hashPassword(password);
+  const result = await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1).for("update");
+    if (!user) return "missing";
+    // Returning (rather than throwing) for an invalid OTP commits its attempt.
+    if (!(await consumeCode(phone, "reset", code, tx))) return "invalid";
+    await tx.update(usersTable).set({ passwordHash }).where(eq(usersTable.id, user.id));
+    await destroyUserSessions(user.id, undefined, tx);
+    return "reset";
+  });
+  if (result === "missing") {
     res.status(404).json({ message: "No Turiwa account uses that number." });
     return;
   }
-  const ok = await consumeCode(phone, "reset", code);
-  if (!ok) {
+  if (result === "invalid") {
     res.status(400).json({ message: "That code isn't right or has expired. Request a new one." });
     return;
   }
-  await db.update(usersTable).set({ passwordHash: hashPassword(password) }).where(eq(usersTable.id, user.id));
-  await destroyUserSessions(user.id);
   res.json({ ok: true });
 });
 
@@ -422,17 +440,22 @@ router.post("/password/change", requireAuth, async (req, res) => {
     res.status(400).json({ message: `Choose a new password with at least ${MIN_PASSWORD} characters.` });
     return;
   }
-  // A Google-only account has no password yet: the first one is set without a
-  // current-password check, which is what turns the fallback on.
-  if (authed.user!.passwordHash) {
-    if (!verifyPassword(currentPassword, authed.user!.passwordHash)) {
-      res.status(400).json({ message: "Your current password is not right. Try again." });
-      return;
-    }
-  }
   const db = getDb();
-  await db.update(usersTable).set({ passwordHash: hashPassword(newPassword) }).where(eq(usersTable.id, authed.user!.id));
-  await destroyUserSessions(authed.user!.id, authed.sessionToken);
+  const passwordHash = hashPassword(newPassword);
+  const changed = await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(usersTable).where(eq(usersTable.id, authed.user!.id)).limit(1).for("update");
+    if (!user) return false;
+    // A Google-only account has no password yet: the first one is set without a
+    // current-password check, which is what turns the fallback on.
+    if (user.passwordHash && !verifyPassword(currentPassword, user.passwordHash)) return false;
+    await tx.update(usersTable).set({ passwordHash }).where(eq(usersTable.id, user.id));
+    await destroyUserSessions(user.id, authed.sessionToken, tx);
+    return true;
+  });
+  if (!changed) {
+    res.status(400).json({ message: "Your current password is not right. Try again." });
+    return;
+  }
   res.json({ ok: true });
 });
 

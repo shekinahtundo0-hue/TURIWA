@@ -7,6 +7,7 @@ import {
   loansTable,
   notificationsTable,
   type Circle,
+  type Contribution,
   type Notification,
 } from "@workspace/db";
 import { requireAuth, type AuthedRequest } from "../lib/auth";
@@ -59,6 +60,47 @@ function activeIn(circle: Circle, userId: string): boolean {
   );
 }
 
+function attributedUserId(
+  circle: Circle,
+  row: Pick<Contribution, "member" | "userId" | "recordedBy">,
+): string | null {
+  // New rows separate the recorder from the immutable beneficiary. A renamed or
+  // reused display name must never move their payment to another account.
+  if (row.recordedBy != null) return row.userId;
+  const name = (row.member ?? "").trim().toLowerCase();
+  if (!name) return row.userId;
+  const matches = (circle.membersList ?? []).filter((member) => member.name.trim().toLowerCase() === name);
+  // Legacy userId may be the recorder, not the payer. Neither an unmatched or
+  // duplicate name nor a conflict with that id proves who paid; do not guess.
+  if (matches.length !== 1 || (row.userId != null && row.userId !== matches[0].id)) return null;
+  return matches[0].id;
+}
+
+/** Only the exact day format written by circle creation/join is evidence. Never
+ *  turn a month label, locale-dependent date or invalid day into a join date. */
+function joinedOn(value: string | undefined): Date | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
+}
+
+function eligibleForMissedCycle(circle: Circle, userId: string, previous: Date): boolean {
+  const members = circle.membersList ?? [];
+  const memberships = members.filter((member) => member.id === userId);
+  if (memberships.length !== 1) return false;
+  const joined = joinedOn(memberships[0].joinedDate);
+  if (!joined || joined > previous) return false;
+  // Circles have no creation timestamp. The founder's join day is the creation
+  // evidence we do store. If absent, the member's own exact join day proves the
+  // circle existed; if present but ambiguous, do not infer an earlier start.
+  const founders = members.filter((member) => member.id === circle.createdBy);
+  if (founders.length === 0) return true;
+  if (founders.length !== 1) return false;
+  const founded = joinedOn(founders[0].joinedDate);
+  return founded !== null && founded <= previous;
+}
+
 /**
  * Reminders that are due right now, written as persistent notifications once per
  * cycle or per loan state. A hosted app has no scheduler, so the check runs when the
@@ -76,7 +118,6 @@ async function generateDueReminders(userId: string): Promise<void> {
   ]);
 
   const now = new Date();
-  const today = isoDay(now);
 
   for (const circle of circles) {
     const frequency = asFrequency(circle.frequency);
@@ -88,11 +129,11 @@ async function generateDueReminders(userId: string): Promise<void> {
     }
     const start = cycleStart(frequency, firstRecord, now);
     const end = cycleEnd(frequency, start);
-    const previous = cycleStart(frequency, firstRecord, new Date(start.getTime() - 1));
+    const previous = frequency === "Monthly"
+      ? new Date(start.getFullYear(), start.getMonth() - 1, 1)
+      : new Date(start.getFullYear(), start.getMonth(), start.getDate() - (frequency === "Weekly" ? 7 : 14));
 
-    const aboutMe = (row: { member: string | null; userId: string | null }) =>
-      row.userId === userId || (row.member ?? "").trim().toLowerCase() ===
-        ((circle.membersList ?? []).find((member) => member.id === userId)?.name ?? "").trim().toLowerCase();
+    const aboutMe = (row: Contribution) => attributedUserId(circle, row) === userId;
 
     const paidInCycle = (from: Date, to: Date | null) =>
       circleRows
@@ -122,9 +163,9 @@ async function generateDueReminders(userId: string): Promise<void> {
       }
     }
 
-    // The cycle that has just ended is the only one a member can still be told they
-    // missed; older ones would arrive as a backlog nobody can act on.
-    if (due) {
+    // Only a full cycle after both creation and joining can be called missed. A
+    // fortnightly circle without a ledger anchor has no known previous cycle.
+    if (due && (frequency !== "Bi-weekly" || firstRecord !== null) && eligibleForMissedCycle(circle, userId, previous)) {
       const paidPrevious = paidInCycle(previous, start);
       if (paidPrevious < circle.contribution) {
         await notify({

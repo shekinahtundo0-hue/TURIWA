@@ -22,7 +22,7 @@ export default function StatementScreen() {
   const colors = useColors();
   const layout = useResponsive();
   const onBack = useSubScreenBack();
-  const { contributions, circles, loans, finance, activeCircleId, profileName } = useTuriwa();
+  const { contributions, circles, loans, finance, activeCircleId, profileName, user } = useTuriwa();
   const [who, setWho] = useState<'mine' | 'group'>('mine');
   const [period, setPeriod] = useState<Period>(currentMonthKey());
   const [circleId, setCircleId] = useState<string>('All');
@@ -43,6 +43,10 @@ export default function StatementScreen() {
     items.filter((item) => {
       if (who === 'group' && circleId !== 'All' && item.circleId !== circleId) return false;
       if (who === 'mine') {
+        // An attributed id is immutable and wins over the name stored beside it; a
+        // member who renames themselves must not lose or gain rows. Legacy rows with
+        // no id still fall back to the name they were written with.
+        if (item.attributedMemberId) return item.attributedMemberId === user?.id;
         const named = (item.member ?? '').trim().toLowerCase();
         const me = profileName.trim().toLowerCase();
         // Rows with no member named were recorded by this account and never
@@ -53,12 +57,16 @@ export default function StatementScreen() {
     });
   const statement = useMemo(
     () => buildStatement(scopeRows(contributions), period),
-    [contributions, circleId, period, profileName, who],
+    [contributions, circleId, period, profileName, user?.id, who],
   );
   const groupName = who === 'mine' ? `${profileName || 'This account'} — personal` : circleId === 'All' ? 'All groups on this account' : circleName(circleId);
   const scopedCircles = who === 'group' && circleId !== 'All' ? circles.filter((circle) => circle.id === circleId) : circles;
   const planned = scopedCircles.reduce((sum, circle) => sum + plannedPerMonth(circle), 0);
-  const loansInScope = who === 'group' && circleId !== 'All' ? loans.filter((loan) => loan.circleId === circleId) : loans;
+  // A personal statement speaks only for the loans this account applied for. Rows
+  // without an applicant are not guessed into someone else's statement.
+  const loansInScope = who === 'mine'
+    ? loans.filter((loan) => loan.applicantId !== null && loan.applicantId === user?.id)
+    : circleId !== 'All' ? loans.filter((loan) => loan.circleId === circleId) : loans;
   const summary = monthlySummary(statement, {
     planned: who === 'mine' ? 0 : planned,
     overdue: loansInScope.filter((loan) => isOverdue(loan)),

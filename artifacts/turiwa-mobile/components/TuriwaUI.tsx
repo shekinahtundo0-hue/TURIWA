@@ -1,4 +1,5 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { randomUUID } from 'expo-crypto';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
@@ -748,7 +749,7 @@ export function TransactionDetailModal({
   );
 }
 
-export function RecordTransactionModal({ visible, onClose, onSave, circles, initialCircleId, initialType = 'Contribution' }: { visible: boolean; onClose: () => void; onSave: (amount: number, note: string, circleId?: string, entry?: LedgerEntry) => Promise<void>; circles: Circle[]; initialCircleId?: string; initialType?: LedgerType }) {
+export function RecordTransactionModal({ visible, onClose, onSave, circles, initialCircleId, initialType = 'Contribution' }: { visible: boolean; onClose: () => void; onSave: (amount: number, note: string, circleId?: string, entry?: LedgerEntry, options?: { idempotencyKey: string; memberId?: string | null }) => Promise<void>; circles: Circle[]; initialCircleId?: string; initialType?: LedgerType }) {
   const colors = useColors();
   const sheet = useSheet();
   const [type, setType] = React.useState<LedgerType>('Contribution');
@@ -760,43 +761,63 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
   const inFlightRef = React.useRef(false);
+  const requestKeyRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     if (visible) {
-      setCircleId(initialCircleId && circles.some((item) => item.id === initialCircleId) ? initialCircleId : circles[0]?.id);
+      // One key per new form, never per tap or data refresh. Failed saves retain it.
+      requestKeyRef.current = randomUUID();
+      setCircleId(initialCircleId ?? circles[0]?.id);
       setType(initialType);
+      setAmount('');
+      setNote('');
       setMemberId(null);
       setMemberOpen(false);
       setError('');
     }
+    // Initial values are captured on opening, not while editing or retrying.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, initialCircleId, initialType]);
+  }, [visible]);
 
-  const selected = circles.find((item) => item.id === circleId) ?? circles[0];
+  // Never silently retarget a form if its circle disappears during a refresh.
+  const selected = circles.find((item) => item.id === circleId);
   const roster = selected?.membersList ?? [];
   const chosen = roster.find((item) => item.id === memberId) ?? null;
+  const missingMember = memberId !== null && !chosen;
   const numAmount = Number(amount);
-  const validAmount = Number.isFinite(numAmount) && numAmount > 0 && numAmount <= MAX_KES;
+  const validAmount = /^\d+$/.test(amount.trim()) && Number.isSafeInteger(numAmount) && numAmount > 0 && numAmount <= MAX_KES;
+  const amountError = amount.trim() && !validAmount
+    ? numAmount > MAX_KES ? 'Amount cannot exceed KES 10,000,000.' : 'Enter a positive whole shilling amount, without decimals or punctuation.'
+    : '';
+  const cannotSave = saving || !validAmount || !selected || missingMember;
 
   const quickAmounts = React.useMemo(() => {
-    const values = [selected?.contribution ?? 0, 500, 1000, 2000, 5000].filter((value) => value > 0 && value <= MAX_KES);
+    const values = [selected?.contribution ?? 0, 500, 1000, 2000, 5000].filter((value) => Number.isSafeInteger(value) && value > 0 && value <= MAX_KES);
     return [...new Set(values)].sort((a, b) => a - b);
   }, [selected?.contribution]);
 
+  const close = () => {
+    if (!inFlightRef.current) onClose();
+  };
+
   const save = async () => {
-    if (!validAmount || !selected || inFlightRef.current || saving) return;
+    if (cannotSave || !selected || !requestKeyRef.current || inFlightRef.current) return;
     inFlightRef.current = true;
     setSaving(true);
     setError('');
     try {
-      await onSave(numAmount, note.trim() || type, selected.id, { type, member: chosen?.name ?? null });
+      await onSave(numAmount, note.trim() || type, selected.id, { type, member: chosen?.name ?? null }, {
+        idempotencyKey: requestKeyRef.current,
+        memberId: chosen?.id ?? null,
+      });
+      requestKeyRef.current = randomUUID();
       setAmount('');
       setNote('');
       setMemberId(null);
       setError('');
       onClose();
     } catch (err) {
-      // Retain form inputs on recoverable error so the user does not lose their entries
+      // Keep both the form and its request key for a safe retry after an uncertain result.
       setError(err instanceof Error ? err.message : 'Could not save. Try again in a moment.');
     } finally {
       setSaving(false);
@@ -805,7 +826,7 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
   };
 
   return (
-    <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType={sheet.animationType} onRequestClose={close}>
       <View style={[sheet.shade, { backgroundColor: 'rgba(16,35,27,0.42)' }]}>
         <View style={[sheet.card, { backgroundColor: colors.card }]}>
           <ScrollView keyboardShouldPersistTaps="handled" style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
@@ -815,7 +836,7 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
                 <Text style={[styles.modalEyebrow, { color: colors.primary, marginBottom: 7 }]}>LEDGER</Text>
                 <Text style={[styles.modalTitle, { color: colors.foreground }]}>Record a transaction</Text>
               </View>
-              <Pressable testID="record-close" onPress={onClose} accessibilityRole="button" accessibilityLabel="Close without saving" hitSlop={12} style={({ pressed }) => [styles.ledgerClose, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}>
+              <Pressable testID="record-close" onPress={close} disabled={saving} accessibilityRole="button" accessibilityLabel="Close without saving" accessibilityState={{ disabled: saving }} hitSlop={12} style={({ pressed }) => [styles.ledgerClose, { borderColor: colors.border, opacity: saving ? 0.55 : pressed ? 0.7 : 1 }]}>
                 <Feather name="x" size={16} color={colors.mutedForeground} />
               </Pressable>
             </View>
@@ -829,8 +850,10 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
                     key={item}
                     testID={`record-type-${item.toLowerCase()}`}
                     onPress={() => setType(item)}
+                    disabled={saving}
                     accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`Record ${ledgerLabel(item).toLowerCase()}`}
+                    accessibilityState={{ selected: active, disabled: saving }}
                     style={({ pressed }) => [
                       styles.typeCell,
                       {
@@ -847,7 +870,7 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
             </View>
             <Text style={[styles.ledgerHint, { color: colors.mutedForeground }]}>{LEDGER_HINT[type]}</Text>
 
-            {circles.length > 1 ? (
+            {circles.length > 1 || (!selected && circles.length > 0) ? (
               <>
                 <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>SELECT CIRCLE</Text>
                 <View style={styles.circlePicker}>
@@ -856,9 +879,15 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
                     return (
                       <Pressable
                         key={item.id}
-                        onPress={() => setCircleId(item.id)}
+                        onPress={() => {
+                          setCircleId(item.id);
+                          if (!active) setMemberId(null);
+                          setMemberOpen(false);
+                        }}
+                        disabled={saving}
                         accessibilityRole="button"
-                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`Select circle ${item.name}`}
+                        accessibilityState={{ selected: active, disabled: saving }}
                         style={({ pressed }) => [styles.circleChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
                       >
                         <Text style={[styles.circleChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{item.name}</Text>
@@ -867,6 +896,9 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
                   })}
                 </View>
               </>
+            ) : null}
+            {!selected ? (
+              <Text accessibilityRole="alert" style={[styles.saveError, { color: colors.destructive }]}>This circle is unavailable. Choose an available circle before recording a transaction.</Text>
             ) : null}
 
             <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>
@@ -881,8 +913,10 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
             <Pressable
               testID="record-member"
               onPress={() => setMemberOpen((open) => !open)}
+              disabled={saving}
               accessibilityRole="button"
-              accessibilityState={{ selected: memberOpen }}
+              accessibilityLabel={chosen ? `Selected member: ${chosen.name}` : 'Choose a member or beneficiary'}
+              accessibilityState={{ expanded: memberOpen, disabled: saving }}
               style={({ pressed }) => [styles.memberField, { backgroundColor: colors.input, borderColor: memberOpen ? colors.primary : colors.border, opacity: pressed ? 0.85 : 1 }]}
             >
               <Text style={[styles.memberValue, { color: chosen ? colors.foreground : colors.mutedForeground }]} numberOfLines={1}>
@@ -901,7 +935,10 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
                           setMemberId(null);
                           setMemberOpen(false);
                         }}
+                        disabled={saving}
                         accessibilityRole="button"
+                        accessibilityLabel="Circle General / Entire Group"
+                        accessibilityState={{ selected: memberId === null, disabled: saving }}
                         style={({ pressed }) => [styles.memberOption, { borderBottomColor: colors.border, backgroundColor: memberId === null ? colors.successSoft : 'transparent', opacity: pressed ? 0.8 : 1 }]}
                       >
                         <View style={{ flex: 1 }}>
@@ -921,8 +958,10 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
                             setMemberId(active ? null : item.id);
                             setMemberOpen(false);
                           }}
+                          disabled={saving}
                           accessibilityRole="button"
-                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`Select ${item.name}`}
+                          accessibilityState={{ selected: active, disabled: saving }}
                           style={({ pressed }) => [styles.memberOption, { borderBottomColor: colors.border, backgroundColor: active ? colors.successSoft : 'transparent', opacity: pressed ? 0.8 : 1 }]}
                         >
                           <View style={{ flex: 1 }}>
@@ -940,24 +979,30 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
               )
             ) : null}
 
+            {missingMember ? (
+              <Text accessibilityRole="alert" style={[styles.saveError, { color: colors.destructive }]}>The selected member is no longer available. Choose a member again.</Text>
+            ) : null}
             <Text style={[styles.ledgerLabel, { color: colors.inkSoft }]}>AMOUNT (KSH)</Text>
-            <View style={[styles.inputWrap, { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border }]}>
+            <View style={[styles.inputWrap, { backgroundColor: colors.input, borderColor: error || amountError ? colors.destructive : colors.border }]}>
               <Text style={[styles.currencyPrefix, { color: colors.mutedForeground }]}>KSh</Text>
               <TextInput
                 testID="contribution-amount"
                 value={amount}
                 onChangeText={(value) => {
-                  setAmount(value.replace(/[^\d]/g, ''));
+                  setAmount(value);
                   if (error) setError('');
                 }}
+                editable={!saving}
+                accessibilityLabel="Transaction amount in Kenyan shillings"
+                accessibilityHint="Enter a positive whole number, up to 10,000,000, without decimals or punctuation."
                 keyboardType="number-pad"
                 placeholder="0"
                 placeholderTextColor={colors.mutedForeground}
                 style={[styles.amountInput, { color: colors.foreground }]}
               />
             </View>
-            {numAmount > MAX_KES ? (
-              <Text style={[styles.saveError, { color: colors.destructive }]}>Amount cannot exceed KES 10,000,000.</Text>
+            {amountError ? (
+              <Text accessibilityRole="alert" style={[styles.saveError, { color: colors.destructive }]}>{amountError}</Text>
             ) : null}
             {quickAmounts.length > 0 ? (
               <View style={styles.amountChips}>
@@ -968,8 +1013,10 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
                       key={value}
                       testID={`quick-amount-${value}`}
                       onPress={() => setAmount(String(value))}
+                      disabled={saving}
                       accessibilityRole="button"
                       accessibilityLabel={`Set the amount to ${value.toLocaleString()} shillings`}
+                      accessibilityState={{ selected: active, disabled: saving }}
                       style={({ pressed }) => [styles.amountChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.successSoft : colors.background, opacity: pressed ? 0.75 : 1 }]}
                     >
                       <Text style={[styles.amountChipText, { color: active ? colors.primary : colors.mutedForeground }]}>{value >= 1000 ? `${value / 1000}K` : value}</Text>
@@ -984,25 +1031,28 @@ export function RecordTransactionModal({ visible, onClose, onSave, circles, init
               testID="contribution-note"
               value={note}
               onChangeText={setNote}
+              editable={!saving}
+              accessibilityLabel="Transaction memo or notes"
               placeholder="e.g. Monthly Savings, Welfare assistance, Audit Fees…"
               placeholderTextColor={colors.mutedForeground}
               style={[styles.textInput, { backgroundColor: colors.input, borderColor: error ? colors.destructive : colors.border, color: colors.foreground }]}
             />
-            {error ? <Text style={[styles.saveError, { color: colors.destructive }]}>{error}</Text> : null}
+            {error ? <Text accessibilityRole="alert" style={[styles.saveError, { color: colors.destructive }]}>{error}</Text> : null}
           </ScrollView>
 
           <Pressable
             testID="record-commit"
             accessibilityRole="button"
             accessibilityLabel={`Commit this ${type.toLowerCase()} to the ledger`}
-            disabled={saving || !validAmount || !selected}
+            accessibilityState={{ disabled: cannotSave, busy: saving }}
+            disabled={cannotSave}
             onPress={save}
             style={({ pressed }) => [
               styles.commitButton,
               {
                 backgroundColor: colors.hero,
                 boxShadow: colors.shadowHero,
-                opacity: saving || !validAmount || !selected ? 0.55 : pressed ? 0.88 : 1,
+                opacity: cannotSave ? 0.55 : pressed ? 0.88 : 1,
               },
             ]}
           >
@@ -1058,8 +1108,8 @@ export function CircleDetailModal({
   onRemoveCoAdmin?: (circleId: string, memberId: string) => Promise<{ success: boolean; message: string }>;
   onTransferPrimaryAdmin?: (circleId: string, memberId: string) => Promise<void>;
   onAddMember?: (circleId: string, name: string, phone?: string) => Promise<{ success: boolean; message: string }>;
-  /** Whether this account owns another circle to fall back on. The API refuses to
-   *  delete the only one, so the control says that instead of offering it. */
+  /** Whether this account has another circle to fall back on. The API also checks
+   *  that this circle has no loans, ledger/engagement history or other members. */
   canDeleteCircle?: boolean;
   onDeleteCircle?: (circleId: string) => Promise<void>;
   onRemoveCircleMember?: (circleId: string, memberId: string) => Promise<void>;
@@ -1145,7 +1195,7 @@ export function CircleDetailModal({
   };
 
   const handleMakeCoAdmin = async (memberId: string) => {
-    if (!onAssignCoAdmin) return;
+    if (!isCircleAdmin || !onAssignCoAdmin) return;
     const member = membersList.find((item) => item.id === memberId);
     confirmCircleAction('Promote to Co-Admin?', `Give ${member?.name ?? 'this member'} Co-Admin access to ${circle.name}?`, 'Promote', () => {
       void onAssignCoAdmin(circle.id, memberId).then((res) => setMemberActionFeedback(res.message)).catch((error) => setMemberActionFeedback(error instanceof Error ? error.message : 'Could not change this role.'));
@@ -1153,7 +1203,7 @@ export function CircleDetailModal({
   };
 
   const handleRemoveCoAdmin = async (memberId: string) => {
-    if (!onRemoveCoAdmin) return;
+    if (!isCircleAdmin || !onRemoveCoAdmin) return;
     const member = membersList.find((item) => item.id === memberId);
     confirmCircleAction('Demote Co-Admin?', `Change ${member?.name ?? 'this Co-Admin'} to a regular Member?`, 'Demote', () => {
       void onRemoveCoAdmin(circle.id, memberId).then((res) => setMemberActionFeedback(res.message)).catch((error) => setMemberActionFeedback(error instanceof Error ? error.message : 'Could not change this role.'));
@@ -1511,11 +1561,13 @@ export function CircleDetailModal({
                       </Text>
                     </View>
 
-                    {/* Admin Delegation Actions */}
-                    {hasAdminRights && m.status === 'active' && !isAdminMember && m.id !== currentUserId && onAssignCoAdmin && onRemoveCoAdmin ? (
+                    {/* Only the Primary Admin can delegate or revoke Co-Admin roles. */}
+                    {isCircleAdmin && m.status === 'active' && !isAdminMember && m.id !== currentUserId && onAssignCoAdmin && onRemoveCoAdmin ? (
                       <View style={styles.adminActionWrap}>
                         {isCoAdminMember ? (
                           <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Remove Co-Admin role from ${m.name}`}
                             onPress={() => handleRemoveCoAdmin(m.id)}
                             style={({ pressed }) => [
                               styles.coAdminToggleBtn,
@@ -1526,6 +1578,8 @@ export function CircleDetailModal({
                           </Pressable>
                         ) : !isCoAdminMember && coAdminsCount < 2 ? (
                           <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Promote ${m.name} to Co-Admin`}
                             onPress={() => handleMakeCoAdmin(m.id)}
                             style={({ pressed }) => [
                               styles.coAdminToggleBtn,
@@ -1769,8 +1823,8 @@ export function CircleDetailModal({
               </Text>
             )}
 
-            {/* Closing the group. Only an admin closes one, and only while another
-                group remains: an account with no circle would have nowhere to land. */}
+            {/* Only the Primary Admin can delete an empty group while another remains.
+                The API checks all history and membership before allowing deletion. */}
             {isCircleAdmin && onDeleteCircle ? (
               <Pressable
                 testID="delete-circle"

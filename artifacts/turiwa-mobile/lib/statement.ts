@@ -167,7 +167,15 @@ export function loanTie(loan: Loan, ledgerRepaid: number) {
   return { onRecord, ledgerRepaid, difference: onRecord - ledgerRepaid };
 }
 
-const cell = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+// A spreadsheet treats a cell that starts with =, +, -, @ or a control character as
+// a formula. Ledger text is member-written, so it is quoted and prefixed with an
+// apostrophe to make Excel and Sheets store it as text rather than execute it.
+const csvUnsafe = /^[=+\-@\t\r]/;
+const cell = (value: string | number) => {
+  const text = String(value);
+  const safe = typeof value === 'string' && csvUnsafe.test(text) ? `'${text}` : text;
+  return `"${safe.replaceAll('"', '""')}"`;
+};
 
 /** A statement as a spreadsheet: the totals first, as their own labelled rows, then
  *  every entry with the reference the ledger gives it. A treasurer can add the column

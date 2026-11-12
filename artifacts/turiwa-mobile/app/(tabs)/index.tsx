@@ -56,11 +56,16 @@ export default function HomeScreen() {
     [contributions, scoped],
   );
   const [ledgerType, setLedgerType] = useState<LedgerType>('Contribution');
-  // One sheet records every kind of ledger entry; the entry point picks the kind.
-  const openLedger = (type: LedgerType = 'Contribution') => {
+  // A circle-detail entry point overrides the active circle for this opening only.
+  const openLedger = (type: LedgerType = 'Contribution', circleId?: string) => {
     Haptics.selectionAsync();
+    setContributionCircleId(circleId);
     setLedgerType(type);
     setModalVisible(true);
+  };
+  const closeLedger = () => {
+    setModalVisible(false);
+    setContributionCircleId(undefined);
   };
   const savedFor = finance.savedFor;
   const isAdmin = (circle: Circle) => Boolean(user?.id) && circle.createdBy === user?.id;
@@ -361,7 +366,7 @@ export default function HomeScreen() {
       </Screen>
       <RecordTransactionModal
         visible={modalVisible}
-        onClose={() => setModalVisible(false)}
+        onClose={closeLedger}
         onSave={addContribution}
         circles={circles}
         initialCircleId={contributionCircleId ?? activeCircle?.id}
@@ -386,8 +391,7 @@ export default function HomeScreen() {
         }}
         onContribute={(circleId) => {
           setDetailCircle(null);
-          setContributionCircleId(circleId);
-          openLedger();
+          openLedger('Contribution', circleId);
         }}
         onSetFine={async (circleId, amount) => {
           await setCircleFine(circleId, amount);

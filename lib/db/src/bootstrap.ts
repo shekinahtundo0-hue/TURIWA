@@ -47,7 +47,7 @@ function monthlyHistory(circleId: string, amount: number, cycles: number, note =
 // never sent to a database that already carries the current marker. `pnpm run check:schema-shape`
 // fails when the statements moved and the marker did not.
 const SCHEMA_SHAPE_KEY = "schema_shape";
-const SCHEMA_SHAPE = "1";
+const SCHEMA_SHAPE = "2";
 
 export async function ensureSchema(db: AppDb): Promise<void> {
   // The marker outlinks the statements that used to create it, so it is made here first.
@@ -349,6 +349,176 @@ async function createSchema(db: AppDb): Promise<void> {
   await db.execute(sql`CREATE TABLE IF NOT EXISTS circle_proposals (id TEXT PRIMARY KEY, circle_id TEXT NOT NULL, created_by TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', starts_at TIMESTAMPTZ NOT NULL, deadline TIMESTAMPTZ NOT NULL, eligible_user_ids JSONB NOT NULL, anonymous BOOLEAN NOT NULL DEFAULT FALSE, approval_threshold INTEGER NOT NULL DEFAULT 50 CHECK(approval_threshold BETWEEN 1 AND 100), allow_abstentions BOOLEAN NOT NULL DEFAULT FALSE, results_visibility TEXT NOT NULL DEFAULT 'after_close', status TEXT NOT NULL DEFAULT 'open', closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await db.execute(sql`CREATE TABLE IF NOT EXISTS proposal_options (id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL REFERENCES circle_proposals(id), label TEXT NOT NULL, position INTEGER NOT NULL)`);
   await db.execute(sql`CREATE TABLE IF NOT EXISTS proposal_votes (id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL REFERENCES circle_proposals(id), voter_key TEXT NOT NULL, voter_user_id TEXT, option_id TEXT NOT NULL REFERENCES proposal_options(id), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(proposal_id,voter_key))`);
+
+  // These guards use the API's existing sessions, not a caller-supplied user id. The
+  // handler must set_config('turiwa.session_token', req.sessionToken, true) inside
+  // the same transaction as the write. They do not replace hosted public-role
+  // lockdown: the table owner can still disable triggers or alter these functions.
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION public.turiwa_session_actor() RETURNS text
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, pg_temp AS $$
+    DECLARE
+      actor_id text;
+    BEGIN
+      SELECT u.id INTO actor_id
+      FROM public.sessions AS s JOIN public.users AS u ON u.id = s.user_id
+      WHERE s.token = NULLIF(current_setting('turiwa.session_token', true), '')
+        AND s.expires_at > clock_timestamp();
+      IF actor_id IS NULL THEN
+        RAISE EXCEPTION 'A valid, unexpired session token is required.' USING ERRCODE = 'insufficient_privilege';
+      END IF;
+      RETURN actor_id;
+    END;
+    $$
+  `);
+  await db.execute(sql`REVOKE EXECUTE ON FUNCTION public.turiwa_session_actor() FROM PUBLIC`);
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION public.enforce_loan_integrity() RETURNS trigger
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, pg_temp AS $$
+    DECLARE
+      actor_id text;
+      loan_circle public.circles%ROWTYPE;
+      funding boolean;
+    BEGIN
+      funding := NEW.status NOT IN ('Pending', 'Rejected');
+      IF TG_OP = 'UPDATE' THEN
+        IF ROW(NEW.user_id, NEW.circle_id) IS DISTINCT FROM ROW(OLD.user_id, OLD.circle_id) THEN
+          RAISE EXCEPTION 'Loan borrower and circle are immutable.' USING ERRCODE = 'check_violation';
+        END IF;
+        IF NEW.status IS DISTINCT FROM OLD.status AND NOT (
+          (OLD.status = 'Pending' AND NEW.status IN ('Active', 'Rejected')) OR
+          (OLD.status = 'Active' AND NEW.status = 'Paid off')
+        ) THEN
+          RAISE EXCEPTION 'Invalid loan status transition.' USING ERRCODE = 'check_violation';
+        END IF;
+        funding := OLD.status = 'Pending' AND NEW.status = 'Active';
+        IF OLD.status <> 'Pending' AND
+          ROW(NEW.reviewed_by, NEW.reviewed_at) IS DISTINCT FROM ROW(OLD.reviewed_by, OLD.reviewed_at) THEN
+          RAISE EXCEPTION 'Loan review history is immutable.' USING ERRCODE = 'check_violation';
+        END IF;
+        IF OLD.status NOT IN ('Pending', 'Rejected') THEN
+          IF ROW(NEW.principal, NEW.total_payable, NEW.monthly_repayment, NEW.months,
+                 NEW.interest_rate, NEW.interest_period, NEW.due_date, NEW.due_on,
+                 NEW.requested_principal, NEW.requested_months, NEW.submitted_at)
+             IS DISTINCT FROM
+             ROW(OLD.principal, OLD.total_payable, OLD.monthly_repayment, OLD.months,
+                 OLD.interest_rate, OLD.interest_period, OLD.due_date, OLD.due_on,
+                 OLD.requested_principal, OLD.requested_months, OLD.submitted_at) THEN
+            RAISE EXCEPTION 'Funded loan principal and terms are immutable.' USING ERRCODE = 'check_violation';
+          END IF;
+          -- Do not revalidate legacy terms or self-review here. Even an old balance
+          -- above its recorded total can be repaid, but not increased or made negative.
+          IF NEW.balance IS DISTINCT FROM OLD.balance AND (NEW.balance < 0 OR NEW.balance > OLD.balance) THEN
+            RAISE EXCEPTION 'Repayments must reduce the balance without going below zero.' USING ERRCODE = 'check_violation';
+          END IF;
+        END IF;
+      ELSE
+        IF NEW.status NOT IN ('Pending', 'Active', 'Paid off', 'Rejected') THEN
+          RAISE EXCEPTION 'Invalid loan status.' USING ERRCODE = 'check_violation';
+        END IF;
+        -- Zero is the old column default for a request whose amount was not supplied separately.
+        IF NEW.requested_principal = 0 THEN NEW.requested_principal := NEW.principal; END IF;
+      END IF;
+      IF NEW.status = 'Pending' AND (NEW.reviewed_by IS NOT NULL OR NEW.reviewed_at IS NOT NULL) THEN
+        RAISE EXCEPTION 'Pending loans cannot claim approval metadata.' USING ERRCODE = 'check_violation';
+      END IF;
+      IF TG_OP = 'INSERT' OR funding OR NEW.status = 'Pending' THEN
+        IF NEW.principal <= 0 OR NEW.monthly_repayment <= 0 OR NEW.total_payable < NEW.principal
+          OR NEW.months <= 0 OR NEW.requested_principal <= 0 OR NEW.requested_months <= 0
+          OR NEW.interest_rate < 0 OR NEW.interest_period NOT IN ('Month', 'Year')
+          OR NEW.balance < 0 OR NEW.balance > NEW.total_payable THEN
+          RAISE EXCEPTION 'Invalid loan amounts, balance or terms.' USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+      IF NEW.status = 'Paid off' AND NEW.balance <> 0 THEN
+        RAISE EXCEPTION 'A paid-off loan must have zero balance.' USING ERRCODE = 'check_violation';
+      END IF;
+      IF funding THEN
+        IF NEW.user_id IS NULL OR NEW.circle_id IS NULL THEN
+          RAISE EXCEPTION 'A funded loan must have a borrower and circle.' USING ERRCODE = 'check_violation';
+        END IF;
+        -- Serialize approval with roster/ownership changes, and check the token after
+        -- acquiring the lock so an expired session cannot survive a lock wait.
+        SELECT * INTO loan_circle FROM public.circles WHERE id = NEW.circle_id FOR UPDATE;
+        IF NOT FOUND THEN
+          RAISE EXCEPTION 'The loan circle does not exist.' USING ERRCODE = 'check_violation';
+        END IF;
+        actor_id := public.turiwa_session_actor();
+        IF actor_id = NEW.user_id THEN
+          RAISE EXCEPTION 'A borrower cannot approve their own loan.' USING ERRCODE = 'insufficient_privilege';
+        END IF;
+        IF actor_id IS DISTINCT FROM loan_circle.created_by AND NOT EXISTS (
+          SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(loan_circle.members_list) = 'array'
+            THEN loan_circle.members_list ELSE '[]'::jsonb END) AS member
+          WHERE member->>'id' = actor_id AND member->>'role' IN ('admin', 'co-admin')
+            AND COALESCE(member->>'status', 'active') = 'active'
+        ) THEN
+          RAISE EXCEPTION 'Only a current circle manager can approve a loan.' USING ERRCODE = 'insufficient_privilege';
+        END IF;
+        IF NEW.reviewed_by IS NOT NULL AND NEW.reviewed_by IS DISTINCT FROM actor_id THEN
+          RAISE EXCEPTION 'The supplied reviewer does not match the authenticated actor.' USING ERRCODE = 'insufficient_privilege';
+        END IF;
+        NEW.reviewed_by := actor_id;
+        NEW.reviewed_at := clock_timestamp();
+      END IF;
+      RETURN NEW;
+    END;
+    $$
+  `);
+  await db.execute(sql`REVOKE EXECUTE ON FUNCTION public.enforce_loan_integrity() FROM PUBLIC`);
+  await db.execute(sql`DROP TRIGGER IF EXISTS loans_integrity ON public.loans`);
+  await db.execute(sql`CREATE TRIGGER loans_integrity BEFORE INSERT OR UPDATE ON public.loans FOR EACH ROW EXECUTE FUNCTION public.enforce_loan_integrity()`);
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION public.enforce_circle_role_authority() RETURNS trigger
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, pg_temp AS $$
+    DECLARE
+      old_roster jsonb;
+      new_roster jsonb;
+      needs_primary boolean;
+      actor_id text;
+    BEGIN
+      needs_primary := NEW.created_by IS DISTINCT FROM OLD.created_by;
+      IF NEW.members_list IS DISTINCT FROM OLD.members_list THEN
+        IF NEW.members_list IS NOT NULL AND jsonb_typeof(NEW.members_list) <> 'array' THEN
+          RAISE EXCEPTION 'The circle roster must be an array.' USING ERRCODE = 'check_violation';
+        END IF;
+        old_roster := CASE WHEN jsonb_typeof(OLD.members_list) = 'array' THEN OLD.members_list ELSE '[]'::jsonb END;
+        new_roster := COALESCE(NEW.members_list, '[]'::jsonb);
+        IF EXISTS (SELECT 1 FROM jsonb_array_elements(new_roster) AS member
+          WHERE jsonb_typeof(member) <> 'object' OR NULLIF(member->>'id', '') IS NULL) OR
+          EXISTS (SELECT 1 FROM jsonb_array_elements(new_roster) AS member
+            GROUP BY member->>'id' HAVING count(*) > 1) THEN
+          RAISE EXCEPTION 'Circle members must have unique, nonempty ids.' USING ERRCODE = 'check_violation';
+        END IF;
+        -- Compare authority by member id, not array order or display fields. A normal
+        -- member can join/leave without a primary token; adding/removing/reactivating
+        -- a manager or changing any existing role cannot use that exception.
+        SELECT needs_primary OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(old_roster) AS before_member
+          FULL JOIN jsonb_array_elements(new_roster) AS after_member
+            ON before_member->>'id' = after_member->>'id'
+          WHERE COALESCE(before_member->>'role', 'member') IS DISTINCT FROM COALESCE(after_member->>'role', 'member')
+            OR ((before_member->>'role' IN ('admin', 'co-admin') OR after_member->>'role' IN ('admin', 'co-admin')
+                 OR before_member->>'id' = OLD.created_by OR after_member->>'id' = OLD.created_by)
+                AND (before_member IS NULL OR after_member IS NULL OR
+                  COALESCE(before_member->>'status', 'active') IS DISTINCT FROM COALESCE(after_member->>'status', 'active')))
+        ) INTO needs_primary;
+      END IF;
+      IF needs_primary THEN
+        -- UPDATE already holds the circle row lock. Authority is always OLD.created_by,
+        -- never a new owner or a role supplied in this same write.
+        actor_id := public.turiwa_session_actor();
+        IF actor_id IS DISTINCT FROM OLD.created_by THEN
+          RAISE EXCEPTION 'Only the current primary admin can change circle authority.' USING ERRCODE = 'insufficient_privilege';
+        END IF;
+      END IF;
+      RETURN NEW;
+    END;
+    $$
+  `);
+  await db.execute(sql`REVOKE EXECUTE ON FUNCTION public.enforce_circle_role_authority() FROM PUBLIC`);
+  await db.execute(sql`DROP TRIGGER IF EXISTS circles_role_authority ON public.circles`);
+  await db.execute(sql`CREATE TRIGGER circles_role_authority BEFORE UPDATE ON public.circles FOR EACH ROW EXECUTE FUNCTION public.enforce_circle_role_authority()`);
 }
 
 export async function seedIfEmpty(db: AppDb, hashPassword: (password: string) => string): Promise<void> {
@@ -397,10 +567,10 @@ export async function seedIfEmpty(db: AppDb, hashPassword: (password: string) =>
         userId: DEMO_USER_ID,
         circleId: "harambee",
         principal: 30000,
-        balance: 26573,
+        balance: 53147,
         monthlyRepayment: 8858,
-        // 30,000 at Harambee Queens' own 10% a month, compounded over six months,
-        // with three instalments already paid.
+        // A sample request, not a self-approved payout: a different manager must
+        // approve it with a real session before any money can move.
         totalPayable: 53147,
         months: 6,
         interestRate: 10,
@@ -408,7 +578,7 @@ export async function seedIfEmpty(db: AppDb, hashPassword: (password: string) =>
         dueDate: "30 Sep 2026",
         dueOn: "2026-09-30",
         purpose: "School fees",
-        status: "Active",
+        status: "Pending",
       },
       {
         // A request the group's admin has not decided on yet — the approvals queue
@@ -442,10 +612,7 @@ export async function seedIfEmpty(db: AppDb, hashPassword: (password: string) =>
     });
   }
 
-  // Rows saved before ownership was tracked can only belong to the account that has
-  // always owned this database, so the upgrade keeps their badges and history
-  // working instead of stranding records no one can see.
-  await db.execute(sql`UPDATE circles SET created_by = ${DEMO_USER_ID} WHERE created_by IS NULL`);
+  // Keep the old contribution attribution, but never guess a circle's primary or
+  // rewrite a loan's borrower to make legacy data pass the authority guards.
   await db.execute(sql`UPDATE contributions SET user_id = ${DEMO_USER_ID} WHERE user_id IS NULL`);
-  await db.execute(sql`UPDATE loans SET user_id = ${DEMO_USER_ID} WHERE user_id IS NULL`);
 }

@@ -28,8 +28,34 @@ router.get("/circles/:circleId/financial-report", requireAuth, async (req, res) 
     db.select().from(contributionsTable).where(eq(contributionsTable.circleId, circle.id)).orderBy(desc(contributionsTable.createdAt)),
     db.select().from(loansTable).where(eq(loansTable.circleId, circle.id)),
   ]);
-  const sum = (type: string) => ledger.filter((r) => r.type === type && r.status === "Complete").reduce((n, r) => n + r.amount, 0);
-  return res.json({ circle: { id: circle.id, name: circle.name }, ledger, loans, totals: { contributions: sum("Contribution"), repayments: sum("Repayment"), expenses: sum("Expense"), welfare: sum("Welfare"), loansIssued: sum("LoanDisbursement"), outstandingLoans: loans.filter((l) => l.status === "Active").reduce((n, l) => n + l.balance, 0), cashRecorded: ledger.reduce((n, r) => n + ((r.type === "Expense" || r.type === "Welfare" || r.type === "LoanDisbursement") ? -r.amount : r.amount), 0) } });
+  const completed = ledger.filter((row) => row.status === "Complete");
+  const sum = (type: string) => completed.filter((row) => row.type === type).reduce((total, row) => total + row.amount, 0);
+  const contributions = sum("Contribution");
+  const repayments = sum("Repayment");
+  const fines = sum("Fine"); // Receipts, not assessed or unpaid penalties.
+  const expenses = sum("Expense");
+  const welfare = sum("Welfare"); // Reserved cash, not an expense.
+  // Payout receipts remain issued even after an Active loan becomes Paid off.
+  const loansIssued = sum("LoanDisbursement");
+  // Only Active loans carry funded debt. Pending/Rejected (and unknown statuses)
+  // are not funded; Paid off loans have no outstanding obligation.
+  const outstandingLoans = loans.filter((loan) => loan.status === "Active").reduce((total, loan) => total + loan.balance, 0);
+  return res.json({
+    circle: { id: circle.id, name: circle.name },
+    ledger,
+    loans,
+    totals: {
+      contributions,
+      repayments,
+      fines,
+      expenses,
+      welfare,
+      loansIssued,
+      outstandingLoans,
+      // Spendable recorded cash: welfare stays distinct but is not available to lend.
+      cashRecorded: contributions + repayments + fines - expenses - welfare - loansIssued,
+    },
+  });
 });
 
 router.get("/circles/:circleId/goals", requireAuth, async (req, res) => {
