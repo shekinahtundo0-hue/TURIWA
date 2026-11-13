@@ -85,7 +85,19 @@ export async function initDb(options: InitDbOptions = {}): Promise<AppDb> {
   // Nothing is cached until the schema and hardening have both succeeded: a retry after a failed
   // boot must start from the schema again, not query a half-initialised connection.
   try {
-    await ensureSchema(db);
+    if (pool) {
+      // On a Worker every pooled connection is an outbound subrequest, and the pool closes each
+      // one after a single use. Opening one per schema statement exhausts the invocation's
+      // subrequest budget on a cold boot, so the whole schema runs on one dedicated connection.
+      const schemaClient = await pool.connect();
+      try {
+        await ensureSchema(drizzlePg(schemaClient, { schema }));
+      } finally {
+        schemaClient.release();
+      }
+    } else {
+      await ensureSchema(db);
+    }
     // A Postgres this API reaches over the network is a Postgres someone else's key can reach too.
     // PGlite is in-process and has no such door, so only the pooled driver is hardened.
     if (pool) {
